@@ -83,7 +83,6 @@ async function forwardTweet(tweet, includes) {
     username,
     tweetId:        tweet.id,
     conversationId: tweet.conversation_id,
-    in_reply_to_user_id: tweet.in_reply_to_user_id,
     tweetText:      text,
     tweetExpandedURL: expanded,
   };
@@ -133,7 +132,7 @@ async function startStream() {
 
   try {
     streamInstance = await twitterClient.v2.searchStream({
-      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,in_reply_to_user_id',
+      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
       'user.fields':  'username',
       expansions:     'author_id,referenced_tweets.id'
     });
