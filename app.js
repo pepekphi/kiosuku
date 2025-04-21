@@ -25,6 +25,12 @@ const INACTIVITY_TIMEOUT = 5400000; // 90 minutes in ms
 // Track the last time a tweet was received
 let lastTweetTime = Date.now();
 
+// --- THREAD MERGING CONFIG ---
+const WAIT_FOR_THREAD_MS = 2000; // 2 seconds debounce per conversation
+// threadBuffers maps conversationId → { tweets: [{ tweet, includes, user }], timeout }
+const threadBuffers = new Map();
+// -----------------------------
+
 // Function to force a full container restart by exiting the process.
 function forceFullRestart() {
   console.log("Forcing full container restart...");
@@ -137,6 +143,79 @@ async function forwardTweet(tweet, includes) {
     });
 }
 
+// Called when a buffered thread has “quieted down” for WAIT_FOR_THREAD_MS
+async function flushThread(conversationId) {
+  const buffer = threadBuffers.get(conversationId);
+  if (!buffer) return;
+  clearTimeout(buffer.timeout);
+
+  // Sort tweets by numeric ID ascending
+  buffer.tweets.sort((a, b) => BigInt(a.tweet.id) - BigInt(b.tweet.id));
+
+  // Merge their texts
+  const mergedText = buffer.tweets
+    .map(({ tweet, includes }) => getFullTweetText(tweet, includes).replace(/\n/g, ' '))
+    .join(' ');
+
+  // Use the root conversationId as tweetId
+  const first = buffer.tweets[0];
+  const user = first.includes.users.find(u => u.id === first.tweet.author_id);
+  const username = user ? user.username : 'unknown';
+
+  const payload = {
+    timestamp: first.tweet.created_at,
+    username,
+    tweetId: conversationId,
+    conversationId,
+    tweetText: mergedText,
+    tweetExpandedURL: '', // no single URL
+  };
+
+  axios.post(WEBHOOK_URL, payload)
+    .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
+    .catch(err => console.error(`Error forwarding thread ${conversationId}:`, err.message));
+
+  supabase
+    .from('Posts')
+    .insert([{
+      post_id:         conversationId,
+      timestamp:       first.tweet.created_at,
+      x_id:            username,
+      conversation_id: conversationId,
+      text:            mergedText,
+      expanded_url:    '',
+    }])
+    .then(({ error }) => {
+      if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
+      else console.log(`Thread ${conversationId} logged to Supabase.`);
+    })
+    .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
+
+  threadBuffers.delete(conversationId);
+}
+
+// New handler that decides whether to buffer or forward immediately
+function handleTweet(tweet, includes) {
+  const isRoot = tweet.conversation_id === tweet.id;
+  const text = tweet.note_tweet?.text || tweet.text;
+  const threadIndicator = /(?:1\/\d+|🧵|thread)/i.test(text);
+
+  if (isRoot && threadIndicator) {
+    // buffer it
+    if (!threadBuffers.has(tweet.conversation_id)) {
+      threadBuffers.set(tweet.conversation_id, { tweets: [], timeout: null });
+    }
+    const buf = threadBuffers.get(tweet.conversation_id);
+    buf.tweets.push({ tweet, includes });
+    // reset debounce timeout
+    clearTimeout(buf.timeout);
+    buf.timeout = setTimeout(() => flushThread(tweet.conversation_id), WAIT_FOR_THREAD_MS);
+  } else {
+    // normal tweet → immediate forward
+    forwardTweet(tweet, includes);
+  }
+}
+
 // Function to initiate the stream connection with a recurring inactivity check
 async function startStream() {
   if (streamInstance) {
@@ -171,7 +250,7 @@ async function startStream() {
         ? includes.users[0].username
         : "unknown";
       console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
-      forwardTweet(data, includes);
+      handleTweet(data, includes);
     }
   } catch (error) {
     if (error && error.code === 429) {
