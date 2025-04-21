@@ -4,193 +4,227 @@ const axios = require('axios');
 
 // Load environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
-const WEBHOOK_URL          = process.env.WEBHOOK_URL;
-const SUPABASE_URL         = process.env.SUPABASE_URL;
-const SUPABASE_KEY         = process.env.SUPABASE_KEY;
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_KEY;
 
 // Create clients
 const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
-const supabase      = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Global variables for stream management
 let streamInstance;
 let isShuttingDown = false;
 
-// Define inactivity timeout (set to 90 minutes)
-const INACTIVITY_TIMEOUT = 90 * 60 * 1000; // in ms
-let lastTweetTime      = Date.now();
+// Nostaleur only mode flag: when true, only tweets from username "nostaleur" will be forwarded to the webhook.
+// let nostaleurOnly = true;
 
-// Force a container restart
+// Define inactivity timeout (set to 60 minutes)
+const INACTIVITY_TIMEOUT = 5400000; // 90 minutes in ms
+
+// Track the last time a tweet was received
+let lastTweetTime = Date.now();
+
+// Function to force a full container restart by exiting the process.
 function forceFullRestart() {
   console.log("Forcing full container restart...");
   process.exit(1);
 }
 
-// Assemble full tweet text (handles Note Tweets, t.co replacements, quoted/retweeted)
+// Function to build the full tweet text using note_tweet and referenced tweets
 function getFullTweetText(tweet, includes) {
-  let fullText = tweet.note_tweet?.text ?? tweet.text;
+  let fullText = tweet.note_tweet && tweet.note_tweet.text ? tweet.note_tweet.text : tweet.text;
 
-  // Replace t.co URLs
-  tweet.entities?.urls?.forEach(urlEntity => {
-    if (!urlEntity.display_url.includes("…")) {
-      fullText = fullText.replace(urlEntity.url, urlEntity.display_url);
-    }
-  });
-
-  // Handle referenced tweets
-  if (tweet.referenced_tweets && includes?.tweets) {
-    tweet.referenced_tweets.forEach(ref => {
-      const refTweet = includes.tweets.find(t => t.id === ref.id);
-      if (!refTweet) return;
-
-      let refText = refTweet.note_tweet?.text ?? refTweet.text;
-      refTweet.entities?.urls?.forEach(u => {
-        if (!u.display_url.includes("…")) {
-          refText = refText.replace(u.url, u.display_url);
-        }
-      });
-
-      const author = includes.users.find(u => u.id === refTweet.author_id)?.username ?? "unknown";
-      if (ref.type === "quoted") {
-        fullText += ` [quoted tweet by @${author}]${refText}[/quoted tweet]`;
-      } else if (ref.type === "retweeted") {
-        fullText = `RT @${author} ${refText}`;
+  // Replace t.co URLs in the main tweet text with display URLs if available
+  // Only replace if the display_url does not contain an ellipsis ("…")
+  if (tweet.entities && tweet.entities.urls) {
+    tweet.entities.urls.forEach(urlEntity => {
+      if (!urlEntity.display_url.includes("…")) {
+        fullText = fullText.replace(urlEntity.url, urlEntity.display_url);
       }
     });
   }
 
+  if (tweet.referenced_tweets && includes && includes.tweets) {
+    tweet.referenced_tweets.forEach(refTweet => {
+      let referencedTweet = includes.tweets.find(t => t.id === refTweet.id);
+      if (referencedTweet) {
+        let referencedFullText = referencedTweet.note_tweet && referencedTweet.note_tweet.text
+          ? referencedTweet.note_tweet.text
+          : referencedTweet.text;
+        // Replace t.co URLs in referenced tweet text with display URLs if available
+        if (referencedTweet.entities && referencedTweet.entities.urls) {
+          referencedTweet.entities.urls.forEach(urlEntity => {
+            if (!urlEntity.display_url.includes("…")) {
+              referencedFullText = referencedFullText.replace(urlEntity.url, urlEntity.display_url);
+            }
+          });
+        }
+        if (refTweet.type === "quoted") {
+          let quotedUser = includes.users.find(u => u.id === referencedTweet.author_id);
+          let quotedUsername = quotedUser ? quotedUser.username : "unknown";
+          fullText +=  `[quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet]`;
+        } else if (refTweet.type === "retweeted") {
+          let retweetedUser = includes.users.find(u => u.id === referencedTweet.author_id);
+          let retweetedUsername = retweetedUser ? retweetedUser.username : "unknown";
+          fullText = `RT @${retweetedUsername} ${referencedFullText}`;
+        }
+      }
+    });
+  }
   return fullText;
 }
 
-// Send to webhook + Supabase
+// Function to send tweet data to the webhook and to Supabase
 async function forwardTweet(tweet, includes) {
-  const user     = includes.users.find(u => u.id === tweet.author_id);
-  const username = user?.username ?? "unknown";
-  let   text     = getFullTweetText(tweet, includes).replace(/\n/g, ' ');
+  const user = includes.users.find(user => user.id === tweet.author_id);
+  const username = user ? user.username : "unknown";
 
-  if (text.startsWith('@')) {
-    console.log(`Skipping @-reply tweet ${tweet.id}`);
+  let fullTweetText = getFullTweetText(tweet, includes);
+  // Ensure no line breaks
+  fullTweetText = fullTweetText.replace(/\n/g, ' ');
+
+  // Skip forwarding if text starts with "@"
+  if (fullTweetText.trim().startsWith('@')) {
+    console.log(`Tweet ${tweet.id} starts with '@'. Skipping forwarding.`);
     return;
   }
-  
-  const expanded = tweet.entities?.urls?.reduce(
-    (max, cur) => cur.expanded_url.length > max.expanded_url.length ? cur : max,
-    tweet.entities?.urls?.[0] ?? { expanded_url: "" }
-  ).expanded_url;
+
+  const tweetExpandedURL = tweet.entities && tweet.entities.urls && tweet.entities.urls.length > 0
+    ? tweet.entities.urls.reduce((max, current) => {
+        return current.expanded_url.length > max.expanded_url.length ? current : max;
+      }, tweet.entities.urls[0]).expanded_url
+    : "";
 
   const payload = {
-    timestamp:      tweet.created_at,
+    timestamp: tweet.created_at,
     username,
-    tweetId:        tweet.id,
+    tweetId: tweet.id,
     conversationId: tweet.conversation_id,
-    tweetText:      text,
-    tweetExpandedURL: expanded,
+    tweetText: fullTweetText,
+    tweetExpandedURL,
   };
 
-  try {
-    // 1) Webhook
-    await axios.post(WEBHOOK_URL, payload);
-    console.log(`Tweet ${tweet.id} forwarded to webhook.`);
+  // Send to Google Apps Script webhook (fire-and-forget)
+  axios.post(WEBHOOK_URL, payload)
+    .then(() => {
+      console.log(`Tweet ${tweet.id} forwarded to webhook.`);
+    })
+    .catch(err => {
+      console.error(`Error forwarding tweet ${tweet.id} to webhook:`, err.response?.data || err.message);
+    });
 
-    // 2) Supabase
-    const { error } = await supabase
-      .from('Posts')
-      .insert([{
-        post_id:         tweet.id,
-        timestamp:       tweet.created_at,
-        x_id:            username,
-        conversation_id: tweet.conversation_id,
-        text,
-        expanded_url:    expanded,
-      }]);
-
-    if (error) {
-      console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
-    } else {
-      console.log(`Tweet ${tweet.id} logged to Supabase.`);
-    }
-  } catch (err) {
-    console.error(`Error handling tweet ${tweet.id}:`, err.response?.data || err.message);
-  }
+  // Insert into Supabase (fire-and-forget)
+  supabase
+    .from('Posts')
+    .insert([{
+      post_id:         tweet.id,
+      timestamp:       tweet.created_at,
+      x_id:            username,
+      conversation_id: tweet.conversation_id,
+      text:            fullTweetText,
+      expanded_url:    tweetExpandedURL,
+    }])
+    .then(({ error }) => {
+      if (error) {
+        console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
+      } else {
+        console.log(`Tweet ${tweet.id} logged to Supabase.`);
+      }
+    })
+    .catch(err => {
+      console.error(`Error inserting tweet ${tweet.id} into Supabase:`, err.message);
+    });
 }
 
-// Start the filtered stream and check for inactivity
+// Function to initiate the stream connection with a recurring inactivity check
 async function startStream() {
   if (streamInstance) {
     console.log('Stream is already active.');
     return;
   }
 
-  // Inactivity watchdog
+  // Set up a recurring check for inactivity every minute
   const inactivityInterval = setInterval(() => {
+    // If 60 minutes have passed without receiving any tweets, force a full restart.
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
-      console.log(`No data for ${INACTIVITY_TIMEOUT/60000} minutes → restarting.`);
+      console.log(`No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
-  }, 60 * 1000);
+  }, 60000); // check every minute
 
   try {
     streamInstance = await twitterClient.v2.searchStream({
       'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
-      'user.fields':  'username',
-      expansions:     'author_id,referenced_tweets.id'
+      'user.fields': 'username',
+      expansions: 'author_id,referenced_tweets.id'
     });
 
     console.log('Connected to Twitter stream.');
+    // Update the last tweet time on connection
     lastTweetTime = Date.now();
 
     for await (const { data, includes } of streamInstance) {
-      lastTweetTime = Date.now();
-      const logUser = includes?.users?.[0]?.username ?? "unknown";
-      console.log(`New tweet: ${data.id} from @${logUser}`);
-
-      // ↓ FIRE & FORGET → concurrent forwarding
+      lastTweetTime = Date.now(); // update on each tweet
+      const usernameForLog = (includes && includes.users && includes.users[0])
+        ? includes.users[0].username
+        : "unknown";
+      console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
       forwardTweet(data, includes);
     }
   } catch (error) {
-    if (error.code === 429) {
-      console.error("Rate limit (429) → restarting.");
+    if (error && error.code === 429) {
+      console.error("Received 429 error. Forcing full container restart now.");
       clearInterval(inactivityInterval);
       forceFullRestart();
-    } else if (error.name === 'AbortError') {
+    } else if (error && error.name === 'AbortError') {
       console.log('Stream aborted.');
     } else {
       console.error('Stream error:', error);
     }
   } finally {
     clearInterval(inactivityInterval);
-    streamInstance?.destroy?.();
+    if (streamInstance && typeof streamInstance.destroy === 'function') {
+      try {
+        streamInstance.destroy();
+      } catch (err) {
+        console.error("Error destroying stream:", err);
+      }
+    }
     streamInstance = null;
   }
 }
 
-// Persistent loop with back‑off
+// Function to manage reconnections; runs until a shutdown is requested.
 async function runStream() {
-  let reconnectDelay = 30_000;
+  let reconnectDelay = 30000; // initial delay 30 seconds for non-rate-limit errors
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30_000;
-    } catch (err) {
-      if (err.code === 429) {
+      reconnectDelay = 30000;
+    } catch (error) {
+      if (error && error.code === 429) {
+        console.error("Received 429 error in runStream. Forcing full container restart now.");
         forceFullRestart();
       }
-      console.error(`Disconnected. Reconnect in ${reconnectDelay/1000}s...`);
-      await new Promise(r => setTimeout(r, reconnectDelay));
+      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay / 1000} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, reconnectDelay));
     }
   }
 }
 
-// Graceful shutdown
+// Graceful shutdown: close the stream and exit.
 function shutdown() {
   isShuttingDown = true;
-  console.log('Shutdown requested. Closing stream...');
-  streamInstance?.destroy?.();
+  console.log('Shutdown initiated. Closing Twitter stream...');
+  if (streamInstance && typeof streamInstance.destroy === 'function') {
+    streamInstance.destroy();
+  }
   process.exit(0);
 }
 
 process.on('SIGTERM', shutdown);
-process.on('SIGINT',  shutdown);
+process.on('SIGINT', shutdown);
 
 runStream();
