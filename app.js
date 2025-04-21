@@ -140,7 +140,7 @@ async function flushThread(conversationId) {
   clearTimeout(buffer.timeout);
 
   // Sort tweets by numeric ID ascending
-  buffer.tweets.sort((a, b) => BigInt(a.tweet.id) - BigInt(b.tweet.id));
+  buffer.tweets.sort((a, b) => (BigInt(a.tweet.id) < BigInt(b.tweet.id) ? -1 : 1));
 
   // Merge their texts
   const mergedText = buffer.tweets
