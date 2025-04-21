@@ -111,15 +111,6 @@ async function forwardTweet(tweet, includes) {
     tweetExpandedURL,
   };
 
-  // Send to Google Apps Script webhook (fire-and-forget)
-  axios.post(WEBHOOK_URL, payload)
-    .then(() => {
-      console.log(`Tweet ${tweet.id} forwarded to webhook.`);
-    })
-    .catch(err => {
-      console.error(`Error forwarding tweet ${tweet.id} to webhook:`, err.response?.data || err.message);
-    });
-
   // Insert into Supabase (fire-and-forget)
   supabase
     .from('Posts')
@@ -138,6 +129,15 @@ async function forwardTweet(tweet, includes) {
     })
     .catch(err => {
       console.error(`Error inserting tweet ${tweet.id} into Supabase:`, err.message);
+    });
+
+  // Send to Google Apps Script webhook (fire-and-forget)
+  axios.post(WEBHOOK_URL, payload)
+    .then(() => {
+      console.log(`Tweet ${tweet.id} forwarded to webhook.`);
+    })
+    .catch(err => {
+      console.error(`Error forwarding tweet ${tweet.id} to webhook:`, err.response?.data || err.message);
     });
 }
 
@@ -162,10 +162,6 @@ async function flushThread(conversationId) {
 
   const payload = { timestamp: first.tweet.created_at, username, tweetId: conversationId, conversationId, tweetText: mergedText, tweetExpandedURL: '' };
 
-  axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
-    .catch(err => console.error(`Error forwarding thread ${conversationId}:`, err.message));
-
   supabase
     .from('Posts')
     .insert([{
@@ -183,6 +179,10 @@ async function flushThread(conversationId) {
       else console.log(`Thread ${conversationId} logged to Supabase.`);
     })
     .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
+  
+  axios.post(WEBHOOK_URL, payload)
+    .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
+    .catch(err => console.error(`Error forwarding thread ${conversationId}:`, err.message));
 
   threadBuffers.delete(conversationId);
 }
