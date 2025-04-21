@@ -116,7 +116,7 @@ async function forwardTweet(tweet, includes) {
     .from('Posts')
     .insert([{
       post_id:         tweet.id,
-      tweet_timestamp: tweet.created_at,
+      post_timestamp: tweet.created_at,
       added_timestamp: new Date().toISOString(),
       x_id:            username,
       conversation_id: tweet.conversation_id,
@@ -166,7 +166,7 @@ async function flushThread(conversationId) {
     .from('Posts')
     .insert([{
       post_id:         conversationId,
-      tweet_timestamp:       first.tweet.created_at,
+      post_timestamp:       first.tweet.created_at,
       added_timestamp: new Date().toISOString(),
       x_id:            username,
       conversation_id: conversationId,
