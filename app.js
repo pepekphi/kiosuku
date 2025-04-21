@@ -26,7 +26,7 @@ const INACTIVITY_TIMEOUT = 5400000; // 90 minutes in ms
 let lastTweetTime = Date.now();
 
 // --- THREAD MERGING CONFIG ---
-const WAIT_FOR_THREAD_MS = 2000; // 2 seconds debounce per conversation
+const WAIT_FOR_THREAD_MS = 6000; // x milliseconds debounce per conversation. I saw it can be up to 5 seconds between sub-posts, so I made it 6000 ms for now.
 // threadBuffers maps conversationId → { tweets: [{ tweet, includes }], timeout }
 const threadBuffers = new Map();
 // -----------------------------
