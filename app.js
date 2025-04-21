@@ -68,6 +68,11 @@ async function forwardTweet(tweet, includes) {
   const username = user?.username ?? "unknown";
   let   text     = getFullTweetText(tweet, includes).replace(/\n/g, ' ');
 
+  if (text.startsWith('@')) {
+    console.log(`Skipping @-reply tweet ${tweet.id}`);
+    return;
+  }
+  
   const expanded = tweet.entities?.urls?.reduce(
     (max, cur) => cur.expanded_url.length > max.expanded_url.length ? cur : max,
     tweet.entities?.urls?.[0] ?? { expanded_url: "" }
