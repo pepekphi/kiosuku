@@ -78,11 +78,14 @@ async function forwardTweet(tweet, includes) {
     tweet.entities?.urls?.[0] ?? { expanded_url: "" }
   ).expanded_url;
 
+  const inReplyToUserId = tweet.in_reply_to_user_id ?? null;
+
   const payload = {
     timestamp:      tweet.created_at,
     username,
     tweetId:        tweet.id,
     conversationId: tweet.conversation_id,
+    in_reply_to_user_id: inReplyToUserId,
     tweetText:      text,
     tweetExpandedURL: expanded,
   };
@@ -132,7 +135,7 @@ async function startStream() {
 
   try {
     streamInstance = await twitterClient.v2.searchStream({
-      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
+      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,in_reply_to_user_id',
       'user.fields':  'username',
       expansions:     'author_id,referenced_tweets.id'
     });
