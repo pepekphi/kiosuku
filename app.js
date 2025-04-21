@@ -78,14 +78,12 @@ async function forwardTweet(tweet, includes) {
     tweet.entities?.urls?.[0] ?? { expanded_url: "" }
   ).expanded_url;
 
-  const inReplyToUserId = tweet.in_reply_to_user_id ?? null;
-
   const payload = {
     timestamp:      tweet.created_at,
     username,
     tweetId:        tweet.id,
     conversationId: tweet.conversation_id,
-    in_reply_to_user_id: inReplyToUserId,
+    in_reply_to_user_id: tweet.in_reply_to_user_id,
     tweetText:      text,
     tweetExpandedURL: expanded,
   };
