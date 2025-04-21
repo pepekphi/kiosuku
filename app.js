@@ -96,11 +96,24 @@ async function forwardTweet(tweet, includes) {
     return;
   }
 
-  const tweetExpandedURL = tweet.entities && tweet.entities.urls && tweet.entities.urls.length > 0
-    ? tweet.entities.urls.reduce((max, current) => {
-        return current.expanded_url.length > max.expanded_url.length ? current : max;
-      }, tweet.entities.urls[0]).expanded_url
-    : "";
+  const urls = tweet.entities?.urls || [];
+  let tweetExpandedURL = "";
+  if (urls.length) {
+    const nonXUrls = urls.filter(u => {
+      try {
+        const hostname = new URL(u.expanded_url).hostname.toLowerCase();
+        return !hostname.endsWith("x.com");
+      } catch {
+        return true;
+      }
+    });
+    const candidates = nonXUrls.length ? nonXUrls : urls;
+    const longest = candidates.reduce((max, current) =>
+      current.expanded_url.length > max.expanded_url.length ? current : max,
+      candidates[0]
+    );
+    tweetExpandedURL = longest.expanded_url;
+  }
 
   const payload = {
     timestamp: tweet.created_at,
