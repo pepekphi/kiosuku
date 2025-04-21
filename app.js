@@ -123,7 +123,7 @@ async function forwardTweet(tweet, includes) {
   // Insert into Supabase (fire-and-forget)
   supabase
     .from('Posts')
-    .insert([{ post_id: tweet.id, timestamp: tweet.created_at, x_id: username, conversation_id: tweet.conversation_id, text: fullTweetText, expanded_url: tweetExpandedURL }])
+    .insert([{ post_id: tweet.id, tweet_timestamp: tweet.created_at, x_id: username, conversation_id: tweet.conversation_id, text: fullTweetText, expanded_url: tweetExpandedURL }])
     .then(({ error }) => {
       if (error) console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
       else console.log(`Tweet ${tweet.id} logged to Supabase.`);
@@ -162,7 +162,7 @@ async function flushThread(conversationId) {
     .from('Posts')
     .insert([{
       post_id:         conversationId,
-      timestamp:       first.tweet.created_at,
+      tweet_timestamp:       first.tweet.created_at,
       x_id:            username,
       conversation_id: conversationId,
       text:            mergedText,
