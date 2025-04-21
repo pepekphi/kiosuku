@@ -27,7 +27,7 @@ let lastTweetTime = Date.now();
 
 // --- THREAD MERGING CONFIG ---
 const WAIT_FOR_THREAD_MS = 2000; // 2 seconds debounce per conversation
-// threadBuffers maps conversationId → { tweets: [{ tweet, includes, user }], timeout }
+// threadBuffers maps conversationId → { tweets: [{ tweet, includes }], timeout }
 const threadBuffers = new Map();
 // -----------------------------
 
@@ -123,20 +123,10 @@ async function forwardTweet(tweet, includes) {
   // Insert into Supabase (fire-and-forget)
   supabase
     .from('Posts')
-    .insert([{
-      post_id:         tweet.id,
-      timestamp:       tweet.created_at,
-      x_id:            username,
-      conversation_id: tweet.conversation_id,
-      text:            fullTweetText,
-      expanded_url:    tweetExpandedURL,
-    }])
+    .insert([{ post_id: tweet.id, timestamp: tweet.created_at, x_id: username, conversation_id: tweet.conversation_id, text: fullTweetText, expanded_url: tweetExpandedURL }])
     .then(({ error }) => {
-      if (error) {
-        console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
-      } else {
-        console.log(`Tweet ${tweet.id} logged to Supabase.`);
-      }
+      if (error) console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
+      else console.log(`Tweet ${tweet.id} logged to Supabase.`);
     })
     .catch(err => {
       console.error(`Error inserting tweet ${tweet.id} into Supabase:`, err.message);
@@ -162,14 +152,7 @@ async function flushThread(conversationId) {
   const user = first.includes.users.find(u => u.id === first.tweet.author_id);
   const username = user ? user.username : 'unknown';
 
-  const payload = {
-    timestamp: first.tweet.created_at,
-    username,
-    tweetId: conversationId,
-    conversationId,
-    tweetText: mergedText,
-    tweetExpandedURL: '', // no single URL
-  };
+  const payload = { timestamp: first.tweet.created_at, username, tweetId: conversationId, conversationId, tweetText: mergedText, tweetExpandedURL: '' };
 
   axios.post(WEBHOOK_URL, payload)
     .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
@@ -177,18 +160,8 @@ async function flushThread(conversationId) {
 
   supabase
     .from('Posts')
-    .insert([{
-      post_id:         conversationId,
-      timestamp:       first.tweet.created_at,
-      x_id:            username,
-      conversation_id: conversationId,
-      text:            mergedText,
-      expanded_url:    '',
-    }])
-    .then(({ error }) => {
-      if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
-      else console.log(`Thread ${conversationId} logged to Supabase.`);
-    })
+    .insert([{ post_id: conversationId, timestamp: first.tweet.created_at, x_id: username, conversation_id: conversationId, text: mergedText, expanded_url: '' }])
+    .then(({ error }) => { if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message); else console.log(`Thread ${conversationId} logged to Supabase.`); })
     .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
 
   threadBuffers.delete(conversationId);
@@ -196,22 +169,26 @@ async function flushThread(conversationId) {
 
 // New handler that decides whether to buffer or forward immediately
 function handleTweet(tweet, includes) {
-  const isRoot = tweet.conversation_id === tweet.id;
+  const conversationId = tweet.conversation_id;
+  const isRoot = conversationId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
   const threadIndicator = /(?:1\/\d+|🧵|thread)/i.test(text);
 
-  if (isRoot && threadIndicator) {
-    // buffer it
-    if (!threadBuffers.has(tweet.conversation_id)) {
-      threadBuffers.set(tweet.conversation_id, { tweets: [], timeout: null });
-    }
-    const buf = threadBuffers.get(tweet.conversation_id);
+  // If already buffering this conversation, keep buffering
+  if (threadBuffers.has(conversationId)) {
+    const buf = threadBuffers.get(conversationId);
     buf.tweets.push({ tweet, includes });
-    // reset debounce timeout
     clearTimeout(buf.timeout);
-    buf.timeout = setTimeout(() => flushThread(tweet.conversation_id), WAIT_FOR_THREAD_MS);
-  } else {
-    // normal tweet → immediate forward
+    buf.timeout = setTimeout(() => flushThread(conversationId), WAIT_FOR_THREAD_MS);
+  }
+  // Otherwise, if this is a root tweet indicating a thread, start buffering
+  else if (isRoot && threadIndicator) {
+    threadBuffers.set(conversationId, { tweets: [{ tweet, includes }], timeout: null });
+    const buf = threadBuffers.get(conversationId);
+    buf.timeout = setTimeout(() => flushThread(conversationId), WAIT_FOR_THREAD_MS);
+  }
+  // Otherwise, normal tweet → immediate forward
+  else {
     forwardTweet(tweet, includes);
   }
 }
@@ -231,24 +208,17 @@ async function startStream() {
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
-  }, 60000); // check every minute
+  }, 60000);
 
   try {
-    streamInstance = await twitterClient.v2.searchStream({
-      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
-      'user.fields': 'username',
-      expansions: 'author_id,referenced_tweets.id'
-    });
+    streamInstance = await twitterClient.v2.searchStream({ 'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities', 'user.fields': 'username', expansions: 'author_id,referenced_tweets.id' });
 
     console.log('Connected to Twitter stream.');
-    // Update the last tweet time on connection
     lastTweetTime = Date.now();
 
     for await (const { data, includes } of streamInstance) {
-      lastTweetTime = Date.now(); // update on each tweet
-      const usernameForLog = (includes && includes.users && includes.users[0])
-        ? includes.users[0].username
-        : "unknown";
+      lastTweetTime = Date.now();
+      const usernameForLog = (includes && includes.users && includes.users[0]) ? includes.users[0].username : "unknown";
       console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
       handleTweet(data, includes);
     }
@@ -277,7 +247,7 @@ async function startStream() {
 
 // Function to manage reconnections; runs until a shutdown is requested.
 async function runStream() {
-  let reconnectDelay = 30000; // initial delay 30 seconds for non-rate-limit errors
+  let reconnectDelay = 30000;
   while (!isShuttingDown) {
     try {
       await startStream();
