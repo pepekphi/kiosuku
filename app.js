@@ -160,8 +160,19 @@ async function flushThread(conversationId) {
 
   supabase
     .from('Posts')
-    .insert([{ post_id: conversationId, timestamp: first.tweet.created_at, x_id: username, conversation_id: conversationId, text: mergedText, expanded_url: '' }])
-    .then(({ error }) => { if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message); else console.log(`Thread ${conversationId} logged to Supabase.`); })
+    .insert([{
+      post_id:         conversationId,
+      timestamp:       first.tweet.created_at,
+      x_id:            username,
+      conversation_id: conversationId,
+      text:            mergedText,
+      expanded_url:    '',
+      is_thread:       true
+    }])
+    .then(({ error }) => {
+      if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
+      else console.log(`Thread ${conversationId} logged to Supabase.`);
+    })
     .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
 
   threadBuffers.delete(conversationId);
