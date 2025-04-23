@@ -179,13 +179,13 @@ async function flushThread(conversationId) {
     .from('Posts')
     .insert([{
       post_id:         conversationId,
-      post_timestamp:       first.tweet.created_at,
+      post_timestamp: first.tweet.created_at,
       added_timestamp: new Date().toISOString(),
       x_id:            username,
       conversation_id: conversationId,
       text:            mergedText,
       expanded_url:    '',
-      is_thread:       true,
+      is_possible_thread: true,
     }])
     .then(({ error }) => {
       if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
