@@ -15,6 +15,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Global variables for stream management
 let streamInstance;
 let isShuttingDown = false;
+let inactivityInterval; // move this to global scope
 
 // Nostaleur only mode flag: when true, only tweets from username "nostaleur" will be forwarded to the webhook.
 // let nostaleurOnly = true;
@@ -185,7 +186,7 @@ async function flushThread(conversationId) {
       conversation_id: conversationId,
       text:            mergedText,
       expanded_url:    '',
-      is_thread:       true,
+      is_possible_thread:       true,
     }])
     .then(({ error }) => {
       if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
@@ -256,10 +257,10 @@ async function startStream() {
       handleTweet(data, includes);
     }
   } catch (error) {
-    if (error?.response?.status === 429) {
-      console.error("Received 429 error. Forcing full container restart now.");
-      clearInterval(inactivityInterval);
-      forceFullRestart();
+    if (error?.response?.status === 429 && error?.data?.connection_issue === 'TooManyConnections') {
+      console.error("Too many streaming connections. Delaying reconnect by 60 seconds...");
+      await new Promise(res => setTimeout(res, 60000)); // avoid hammering
+      return;
     } else if (error && error.name === 'AbortError') {
       console.log('Stream aborted.');
     } else {
@@ -279,20 +280,30 @@ async function startStream() {
   }
 }
 
-// Function to manage reconnections; runs until a shutdown is requested.
+// Function to manage reconnections
 async function runStream() {
   let reconnectDelay = 30000;
+  const maxDelay = 300000; // max 5 minutes
+
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30000;
+      reconnectDelay = 30000; // reset on success
     } catch (error) {
+      if (error?.response?.status === 429 && error?.data?.connection_issue === 'TooManyConnections') {
+        console.error("Too many streaming connections. Waiting 60s before retrying...");
+        await new Promise(res => setTimeout(res, 60000));
+        continue;
+      }
+
       if (error?.response?.status === 429) {
-        console.error("Received 429 error in runStream. Forcing full container restart now.");
+        console.error("Hard 429 limit hit. Forcing container restart.");
         forceFullRestart();
       }
-      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay / 1000} seconds...`);
-      await new Promise(resolve => setTimeout(resolve, reconnectDelay));
+
+      console.error(`Stream failed. Reconnecting in ${reconnectDelay / 1000} seconds...`);
+      await new Promise(res => setTimeout(res, reconnectDelay));
+      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
   }
 }
@@ -304,6 +315,7 @@ function shutdown() {
   if (streamInstance && typeof streamInstance.destroy === 'function') {
     streamInstance.destroy();
   }
+  if (inactivityInterval) clearInterval(inactivityInterval);
   process.exit(0);
 }
 
