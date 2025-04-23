@@ -206,7 +206,7 @@ function handleTweet(tweet, includes) {
   const conversationId = tweet.conversation_id;
   const isRoot = conversationId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
-  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|\bthread\b)/i.test(text);
+  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|\bthread\b|👇)/i.test(text);
 
   // If already buffering this conversation, keep buffering
   if (threadBuffers.has(conversationId)) {
@@ -258,9 +258,9 @@ async function startStream() {
     }
   } catch (error) {
     if (error?.response?.status === 429 && error?.data?.connection_issue === 'TooManyConnections') {
-      const err = new Error("Too many streaming connections");
-      err.code = 'TooManyConnections';
-      throw err;
+      console.error("Too many streaming connections. Waiting 60s before retrying...");
+      await new Promise(res => setTimeout(res, 60000));
+      return;
     } else if (error?.response?.status === 429) {
       const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
       const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
@@ -279,7 +279,7 @@ async function startStream() {
     } else if (error && error.name === 'AbortError') {
       console.log('Stream aborted.');
     } else {
-      console.error('Stream error:', error);
+      console.error(`Stream error: ${error?.code || error?.name || 'unknown'} - ${error?.data?.detail || error.message}`);
       await new Promise(res => setTimeout(res, 30000)); // reconnect safely
     }
   } finally {
