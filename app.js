@@ -301,7 +301,7 @@ async function runStream() {
         forceFullRestart();
       }
 
-      console.error(`Stream failed. Reconnecting in ${reconnectDelay / 1000} seconds...`);
+      console.error(`Stream failed (${error?.code || error?.name || 'unknown'}). Reconnecting in ${reconnectDelay / 1000} seconds...`);
       await new Promise(res => setTimeout(res, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
