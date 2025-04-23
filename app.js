@@ -234,9 +234,7 @@ async function startStream() {
     return;
   }
 
-  // Set up a recurring check for inactivity every minute
   const inactivityInterval = setInterval(() => {
-    // If 60 minutes have passed without receiving any tweets, force a full restart.
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
       console.log(`No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...`);
       clearInterval(inactivityInterval);
@@ -245,42 +243,20 @@ async function startStream() {
   }, 60000);
 
   try {
-    streamInstance = await twitterClient.v2.searchStream({ 'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities', 'user.fields': 'username', expansions: 'author_id,referenced_tweets.id' });
+    streamInstance = await twitterClient.v2.searchStream({
+      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
+      'user.fields': 'username',
+      expansions: 'author_id,referenced_tweets.id',
+    });
 
     console.log('Connected to Twitter stream.');
     lastTweetTime = Date.now();
 
     for await (const { data, includes } of streamInstance) {
       lastTweetTime = Date.now();
-      const usernameForLog = (includes && includes.users && includes.users[0]) ? includes.users[0].username : "unknown";
+      const usernameForLog = (includes?.users?.[0]?.username) || "unknown";
       console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
       handleTweet(data, includes);
-    }
-  } catch (error) {
-    if (error?.response?.status === 429 && error?.data?.connection_issue === 'TooManyConnections') {
-      const err = new Error("Too many streaming connections");
-      err.code = 'TooManyConnections';
-      throw err;
-    } else if (error?.response?.status === 429) {
-      const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
-      const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
-
-      if (remaining === 0 && reset) {
-        const now = Math.floor(Date.now() / 1000);
-        const waitTime = reset - now;
-        const delay = Math.max(waitTime, 60);
-        console.error(`Rate limit exceeded. Waiting ${delay} seconds until reset.`);
-        await new Promise(res => setTimeout(res, delay * 1000));
-        return;
-      }
-
-      console.error("Hard 429 limit hit. Forcing container restart.");
-      forceFullRestart();
-    } else if (error && error.name === 'AbortError') {
-      console.log('Stream aborted.');
-    } else {
-      console.error(`Stream error: ${error?.code || error?.name || 'unknown'} - ${error?.data?.detail || error.message}`);
-      await new Promise(res => setTimeout(res, 30000)); // reconnect safely
     }
   } finally {
     clearInterval(inactivityInterval);
@@ -303,13 +279,12 @@ async function runStream() {
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30000; // reset on success
+      reconnectDelay = 30000; // reset delay after a successful stream
     } catch (error) {
-      if (error?.response?.status === 429 && error?.data?.connection_issue === 'TooManyConnections') {
-        console.error("Too many streaming connections. Waiting 60s before retrying...");
-        await new Promise(res => setTimeout(res, 60000));
-        continue;
-      } else if (error?.response?.status === 429) {
+      const isTooManyConnections = error?.code === 'TooManyConnections';
+      const isTooManyRequests = error?.response?.status === 429;
+
+      if (isTooManyRequests) {
         const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
         const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
 
@@ -319,11 +294,16 @@ async function runStream() {
           const delay = Math.max(waitTime, 60);
           console.error(`Rate limit exceeded. Waiting ${delay} seconds until reset.`);
           await new Promise(res => setTimeout(res, delay * 1000));
-          return;
+          continue;
         }
 
-      console.error("Hard 429 limit hit. Forcing container restart.");
-      forceFullRestart();
+        console.error("Hard 429 limit hit. Forcing container restart.");
+        forceFullRestart();
+      }
+
+      if (isTooManyConnections) {
+        console.error("Too many streaming connections.");
+        // fall through to backoff logic below
       }
 
       console.error(`Stream failed (${error?.code || error?.name || 'unknown'}). Reconnecting in ${reconnectDelay / 1000} seconds...`);
