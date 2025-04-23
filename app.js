@@ -258,9 +258,9 @@ async function startStream() {
     }
   } catch (error) {
     if (error?.response?.status === 429 && error?.data?.connection_issue === 'TooManyConnections') {
-      console.error("Too many streaming connections. Waiting 60s before retrying...");
-      await new Promise(res => setTimeout(res, 60000));
-      return;
+      const err = new Error("Too many streaming connections");
+      err.code = 'TooManyConnections';
+      throw err;
     } else if (error?.response?.status === 429) {
       const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
       const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
