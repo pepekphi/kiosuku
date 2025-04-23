@@ -261,6 +261,21 @@ async function startStream() {
       console.error("Too many streaming connections. Delaying reconnect by 60 seconds...");
       await new Promise(res => setTimeout(res, 60000)); // avoid hammering
       return;
+    } else if (error?.response?.status === 429) {
+      const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
+      const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
+
+      if (remaining === 0 && reset) {
+        const now = Math.floor(Date.now() / 1000);
+        const waitTime = reset - now;
+        const delay = Math.max(waitTime, 60);
+        console.error(`Rate limit exceeded. Waiting ${delay} seconds until reset.`);
+        await new Promise(res => setTimeout(res, delay * 1000));
+        return;
+      }
+
+      console.error("Hard 429 limit hit. Forcing container restart.");
+      forceFullRestart();
     } else if (error && error.name === 'AbortError') {
       console.log('Stream aborted.');
     } else {
@@ -294,11 +309,21 @@ async function runStream() {
         console.error("Too many streaming connections. Waiting 60s before retrying...");
         await new Promise(res => setTimeout(res, 60000));
         continue;
-      }
+      } else if (error?.response?.status === 429) {
+        const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
+        const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
 
-      if (error?.response?.status === 429) {
-        console.error("Hard 429 limit hit. Forcing container restart.");
-        forceFullRestart();
+        if (remaining === 0 && reset) {
+          const now = Math.floor(Date.now() / 1000);
+          const waitTime = reset - now;
+          const delay = Math.max(waitTime, 60);
+          console.error(`Rate limit exceeded. Waiting ${delay} seconds until reset.`);
+          await new Promise(res => setTimeout(res, delay * 1000));
+          return;
+        }
+
+      console.error("Hard 429 limit hit. Forcing container restart.");
+      forceFullRestart();
       }
 
       console.error(`Stream failed (${error?.code || error?.name || 'unknown'}). Reconnecting in ${reconnectDelay / 1000} seconds...`);
