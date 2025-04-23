@@ -244,7 +244,11 @@ async function startStream() {
   }, 60000);
 
   try {
-    streamInstance = await twitterClient.v2.searchStream({ 'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities', 'user.fields': 'username', expansions: 'author_id,referenced_tweets.id' });
+    streamInstance = await twitterClient.v2.searchStream({
+      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
+      'user.fields': 'username',
+      expansions: 'author_id,referenced_tweets.id'
+    });
 
     console.log('Connected to Twitter stream.');
     lastTweetTime = Date.now();
@@ -257,9 +261,13 @@ async function startStream() {
     }
   } catch (error) {
     if (error && error.code === 429) {
-      console.error("Received 429 error. Forcing full container restart now.");
+      // honor Retry-After header and rethrow to be handled by runStream
+      const retryAfter = error.headers && error.headers['retry-after']
+        ? parseInt(error.headers['retry-after'], 10)
+        : null;
+      console.error(`Rate limit hit. ${retryAfter ? `Retrying after ${retryAfter}s.` : 'No Retry-After header.'}`);
       clearInterval(inactivityInterval);
-      forceFullRestart();
+      throw error;
     } else if (error && error.name === 'AbortError') {
       console.log('Stream aborted.');
     } else {
@@ -280,18 +288,23 @@ async function startStream() {
 
 // Function to manage reconnections; runs until a shutdown is requested.
 async function runStream() {
-  let reconnectDelay = 30000;
+  let reconnectDelay = 1000;      // start at 1 second
+  const MAX_DELAY = 60000;        // cap at 60 seconds
+
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30000;
+      reconnectDelay = 1000;       // reset after a successful connect
     } catch (error) {
-      if (error && error.code === 429) {
-        console.error("Received 429 error in runStream. Forcing full container restart now.");
-        forceFullRestart();
+      // if Twitter told us exactly how long to wait, use that
+      if (error.headers && error.headers['retry-after']) {
+        const ra = parseInt(error.headers['retry-after'], 10);
+        reconnectDelay = ra * 1000;
       }
-      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay / 1000} seconds...`);
+      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay/1000}s...`);
       await new Promise(resolve => setTimeout(resolve, reconnectDelay));
+      // exponential backoff for next time
+      reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY);
     }
   }
 }
