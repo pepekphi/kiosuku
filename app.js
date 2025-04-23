@@ -205,7 +205,7 @@ function handleTweet(tweet, includes) {
   const conversationId = tweet.conversation_id;
   const isRoot = conversationId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
-  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|\bthread\b)/i.test(text);
+  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|👇|\bthread\b)/i.test(text);
 
   // If already buffering this conversation, keep buffering
   if (threadBuffers.has(conversationId)) {
