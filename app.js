@@ -257,7 +257,14 @@ async function startStream() {
     }
   } catch (error) {
     if (error && error.code === 429) {
-      console.error("Received 429 error. Forcing full container restart now.");
+      console.error("Received 429 error.");
+        if (error.response) {
+        console.error("Response status:", error.response.status);
+        console.error("Response headers:", JSON.stringify(error.response.headers, null, 2));
+        console.error("Response data:", JSON.stringify(error.response.data, null, 2));
+      } else {
+        console.error("No response object. Full error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+      }
       clearInterval(inactivityInterval);
       forceFullRestart();
     } else if (error && error.name === 'AbortError') {
