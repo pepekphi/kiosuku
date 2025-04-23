@@ -256,7 +256,7 @@ async function startStream() {
       handleTweet(data, includes);
     }
   } catch (error) {
-    if (error && error.code === 429) {
+    if (error?.response?.status === 429) {
       console.error("Received 429 error. Forcing full container restart now.");
       clearInterval(inactivityInterval);
       forceFullRestart();
@@ -264,6 +264,7 @@ async function startStream() {
       console.log('Stream aborted.');
     } else {
       console.error('Stream error:', error);
+      await new Promise(res => setTimeout(res, 30000)); // reconnect safely
     }
   } finally {
     clearInterval(inactivityInterval);
@@ -286,7 +287,7 @@ async function runStream() {
       await startStream();
       reconnectDelay = 30000;
     } catch (error) {
-      if (error && error.code === 429) {
+      if (error?.response?.status === 429) {
         console.error("Received 429 error in runStream. Forcing full container restart now.");
         forceFullRestart();
       }
