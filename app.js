@@ -185,7 +185,7 @@ async function flushThread(conversationId) {
       conversation_id: conversationId,
       text:            mergedText,
       expanded_url:    '',
-      is_possible_thread:       true,
+      is_thread:       true,
     }])
     .then(({ error }) => {
       if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
@@ -205,7 +205,7 @@ function handleTweet(tweet, includes) {
   const conversationId = tweet.conversation_id;
   const isRoot = conversationId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
-  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|👇|\bthread\b)/i.test(text);
+  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|\bthread\b)/i.test(text);
 
   // If already buffering this conversation, keep buffering
   if (threadBuffers.has(conversationId)) {
@@ -257,14 +257,7 @@ async function startStream() {
     }
   } catch (error) {
     if (error && error.code === 429) {
-      console.error("Received 429 error.");
-        if (error.response) {
-        console.error("Response status:", error.response.status);
-        console.error("Response headers:", JSON.stringify(error.response.headers, null, 2));
-        console.error("Response data:", JSON.stringify(error.response.data, null, 2));
-      } else {
-        console.error("No response object. Full error:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
-      }
+      console.error("Received 429 error. Forcing full container restart now.");
       clearInterval(inactivityInterval);
       forceFullRestart();
     } else if (error && error.name === 'AbortError') {
