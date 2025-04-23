@@ -69,11 +69,11 @@ function getFullTweetText(tweet, includes) {
         if (refTweet.type === "quoted") {
           let quotedUser = includes.users.find(u => u.id === referencedTweet.author_id);
           let quotedUsername = quotedUser ? quotedUser.username : "unknown";
-          fullText +=  [quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet];
+          fullText +=  `[quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet]`;
         } else if (refTweet.type === "retweeted") {
           let retweetedUser = includes.users.find(u => u.id === referencedTweet.author_id);
           let retweetedUsername = retweetedUser ? retweetedUser.username : "unknown";
-          fullText = RT @${retweetedUsername} ${referencedFullText};
+          fullText = `RT @${retweetedUsername} ${referencedFullText}`;
         }
       }
     });
@@ -92,7 +92,7 @@ async function forwardTweet(tweet, includes) {
 
   // Skip forwarding if text starts with "@"
   if (fullTweetText.trim().startsWith('@')) {
-    console.log(Tweet ${tweet.id} starts with '@'. Skipping forwarding.);
+    console.log(`Tweet ${tweet.id} starts with '@'. Skipping forwarding.`);
     return;
   }
 
@@ -137,20 +137,20 @@ async function forwardTweet(tweet, includes) {
       expanded_url:    tweetExpandedURL
     }])
     .then(({ error }) => {
-      if (error) console.error(Supabase insert error for tweet ${tweet.id}:, error.message);
-      else console.log(Tweet ${tweet.id} logged to Supabase.);
+      if (error) console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
+      else console.log(`Tweet ${tweet.id} logged to Supabase.`);
     })
     .catch(err => {
-      console.error(Error inserting tweet ${tweet.id} into Supabase:, err.message);
+      console.error(`Error inserting tweet ${tweet.id} into Supabase:`, err.message);
     });
 
   // Send to Google Apps Script webhook (fire-and-forget)
   axios.post(WEBHOOK_URL, payload)
     .then(() => {
-      console.log(Tweet ${tweet.id} forwarded to webhook.);
+      console.log(`Tweet ${tweet.id} forwarded to webhook.`);
     })
     .catch(err => {
-      console.error(Error forwarding tweet ${tweet.id} to webhook:, err.response?.data || err.message);
+      console.error(`Error forwarding tweet ${tweet.id} to webhook:`, err.response?.data || err.message);
     });
 }
 
@@ -179,23 +179,23 @@ async function flushThread(conversationId) {
     .from('Posts')
     .insert([{
       post_id:         conversationId,
-      post_timestamp: first.tweet.created_at,
+      post_timestamp:       first.tweet.created_at,
       added_timestamp: new Date().toISOString(),
       x_id:            username,
       conversation_id: conversationId,
       text:            mergedText,
       expanded_url:    '',
-      is_possible_thread: true,
+      is_possible_thread:       true,
     }])
     .then(({ error }) => {
-      if (error) console.error(Supabase insert error for thread ${conversationId}:, error.message);
-      else console.log(Thread ${conversationId} logged to Supabase.);
+      if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
+      else console.log(`Thread ${conversationId} logged to Supabase.`);
     })
-    .catch(err => console.error(Error inserting thread ${conversationId} into Supabase:, err.message));
+    .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
   
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(Thread ${conversationId} forwarded to webhook.))
-    .catch(err => console.error(Error forwarding thread ${conversationId}:, err.message));
+    .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
+    .catch(err => console.error(`Error forwarding thread ${conversationId}:`, err.message));
 
   threadBuffers.delete(conversationId);
 }
@@ -235,9 +235,9 @@ async function startStream() {
 
   // Set up a recurring check for inactivity every minute
   const inactivityInterval = setInterval(() => {
-    // If INACTIVITY_TIMEOUT minutes have passed without receiving any tweets, force a full restart.
+    // If 60 minutes have passed without receiving any tweets, force a full restart.
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
-      console.log(No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...);
+      console.log(`No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
@@ -252,7 +252,7 @@ async function startStream() {
     for await (const { data, includes } of streamInstance) {
       lastTweetTime = Date.now();
       const usernameForLog = (includes && includes.users && includes.users[0]) ? includes.users[0].username : "unknown";
-      console.log(New tweet detected: ${data.id} from @${usernameForLog});
+      console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
       handleTweet(data, includes);
     }
   } catch (error) {
@@ -280,22 +280,14 @@ async function startStream() {
 
 // Function to manage reconnections; runs until a shutdown is requested.
 async function runStream() {
-  let reconnectDelay = 1000; // Start with 1 second
-  const maxDelay = 300000; // Cap at 5 minutes
+  let reconnectDelay = 30000;
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 1000; // Reset after successful start
+      reconnectDelay = 30000;
     } catch (error) {
       if (error && error.code === 429) {
-        const retryAfter = parseInt(error?.headers?.['retry-after'], 10);
-        if (!isNaN(retryAfter)) {
-          reconnectDelay = Math.min(retryAfter * 1000, maxDelay);
-          console.error(`Received 429. Retry-After header present: waiting ${reconnectDelay / 1000} seconds.`);
-        } else {
-          reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
-          console.error(`Received 429 without Retry-After. Backing off to ${reconnectDelay / 1000} seconds.`);
-        }
+        console.error("Received 429 error in runStream. Forcing full container restart now.");
         forceFullRestart();
       }
       console.error(`Stream disconnected. Reconnecting in ${reconnectDelay / 1000} seconds...`);
