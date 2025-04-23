@@ -69,11 +69,11 @@ function getFullTweetText(tweet, includes) {
         if (refTweet.type === "quoted") {
           let quotedUser = includes.users.find(u => u.id === referencedTweet.author_id);
           let quotedUsername = quotedUser ? quotedUser.username : "unknown";
-          fullText +=  `[quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet]`;
+          fullText +=  [quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet];
         } else if (refTweet.type === "retweeted") {
           let retweetedUser = includes.users.find(u => u.id === referencedTweet.author_id);
           let retweetedUsername = retweetedUser ? retweetedUser.username : "unknown";
-          fullText = `RT @${retweetedUsername} ${referencedFullText}`;
+          fullText = RT @${retweetedUsername} ${referencedFullText};
         }
       }
     });
@@ -92,7 +92,7 @@ async function forwardTweet(tweet, includes) {
 
   // Skip forwarding if text starts with "@"
   if (fullTweetText.trim().startsWith('@')) {
-    console.log(`Tweet ${tweet.id} starts with '@'. Skipping forwarding.`);
+    console.log(Tweet ${tweet.id} starts with '@'. Skipping forwarding.);
     return;
   }
 
@@ -137,20 +137,20 @@ async function forwardTweet(tweet, includes) {
       expanded_url:    tweetExpandedURL
     }])
     .then(({ error }) => {
-      if (error) console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
-      else console.log(`Tweet ${tweet.id} logged to Supabase.`);
+      if (error) console.error(Supabase insert error for tweet ${tweet.id}:, error.message);
+      else console.log(Tweet ${tweet.id} logged to Supabase.);
     })
     .catch(err => {
-      console.error(`Error inserting tweet ${tweet.id} into Supabase:`, err.message);
+      console.error(Error inserting tweet ${tweet.id} into Supabase:, err.message);
     });
 
   // Send to Google Apps Script webhook (fire-and-forget)
   axios.post(WEBHOOK_URL, payload)
     .then(() => {
-      console.log(`Tweet ${tweet.id} forwarded to webhook.`);
+      console.log(Tweet ${tweet.id} forwarded to webhook.);
     })
     .catch(err => {
-      console.error(`Error forwarding tweet ${tweet.id} to webhook:`, err.response?.data || err.message);
+      console.error(Error forwarding tweet ${tweet.id} to webhook:, err.response?.data || err.message);
     });
 }
 
@@ -188,14 +188,14 @@ async function flushThread(conversationId) {
       is_possible_thread: true,
     }])
     .then(({ error }) => {
-      if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
-      else console.log(`Thread ${conversationId} logged to Supabase.`);
+      if (error) console.error(Supabase insert error for thread ${conversationId}:, error.message);
+      else console.log(Thread ${conversationId} logged to Supabase.);
     })
-    .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
+    .catch(err => console.error(Error inserting thread ${conversationId} into Supabase:, err.message));
   
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
-    .catch(err => console.error(`Error forwarding thread ${conversationId}:`, err.message));
+    .then(() => console.log(Thread ${conversationId} forwarded to webhook.))
+    .catch(err => console.error(Error forwarding thread ${conversationId}:, err.message));
 
   threadBuffers.delete(conversationId);
 }
@@ -235,20 +235,16 @@ async function startStream() {
 
   // Set up a recurring check for inactivity every minute
   const inactivityInterval = setInterval(() => {
-    // If 60 minutes have passed without receiving any tweets, force a full restart.
+    // If INACTIVITY_TIMEOUT minutes have passed without receiving any tweets, force a full restart.
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
-      console.log(`No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...`);
+      console.log(No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
   }, 60000);
 
   try {
-    streamInstance = await twitterClient.v2.searchStream({
-      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
-      'user.fields': 'username',
-      expansions: 'author_id,referenced_tweets.id'
-    });
+    streamInstance = await twitterClient.v2.searchStream({ 'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities', 'user.fields': 'username', expansions: 'author_id,referenced_tweets.id' });
 
     console.log('Connected to Twitter stream.');
     lastTweetTime = Date.now();
@@ -256,18 +252,14 @@ async function startStream() {
     for await (const { data, includes } of streamInstance) {
       lastTweetTime = Date.now();
       const usernameForLog = (includes && includes.users && includes.users[0]) ? includes.users[0].username : "unknown";
-      console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
+      console.log(New tweet detected: ${data.id} from @${usernameForLog});
       handleTweet(data, includes);
     }
   } catch (error) {
     if (error && error.code === 429) {
-      // honor Retry-After header and rethrow to be handled by runStream
-      const retryAfter = error.headers && error.headers['retry-after']
-        ? parseInt(error.headers['retry-after'], 10)
-        : null;
-      console.error(`Rate limit hit. ${retryAfter ? `Retrying after ${retryAfter}s.` : 'No Retry-After header.'}`);
+      console.error("Received 429 error. Forcing full container restart now.");
       clearInterval(inactivityInterval);
-      throw error;
+      forceFullRestart();
     } else if (error && error.name === 'AbortError') {
       console.log('Stream aborted.');
     } else {
@@ -288,23 +280,26 @@ async function startStream() {
 
 // Function to manage reconnections; runs until a shutdown is requested.
 async function runStream() {
-  let reconnectDelay = 1000;      // start at 1 second
-  const MAX_DELAY = 60000;        // cap at 60 seconds
-
+  let reconnectDelay = 1000; // Start with 1 second
+  const maxDelay = 300000; // Cap at 5 minutes
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 1000;       // reset after a successful connect
+      reconnectDelay = 1000; // Reset after successful start
     } catch (error) {
-      // if Twitter told us exactly how long to wait, use that
-      if (error.headers && error.headers['retry-after']) {
-        const ra = parseInt(error.headers['retry-after'], 10);
-        reconnectDelay = ra * 1000;
+      if (error && error.code === 429) {
+        const retryAfter = parseInt(error?.headers?.['retry-after'], 10);
+        if (!isNaN(retryAfter)) {
+          reconnectDelay = Math.min(retryAfter * 1000, maxDelay);
+          console.error(`Received 429. Retry-After header present: waiting ${reconnectDelay / 1000} seconds.`);
+        } else {
+          reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+          console.error(`Received 429 without Retry-After. Backing off to ${reconnectDelay / 1000} seconds.`);
+        }
+        forceFullRestart();
       }
-      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay/1000}s...`);
+      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay / 1000} seconds...`);
       await new Promise(resolve => setTimeout(resolve, reconnectDelay));
-      // exponential backoff for next time
-      reconnectDelay = Math.min(reconnectDelay * 2, MAX_DELAY);
     }
   }
 }
