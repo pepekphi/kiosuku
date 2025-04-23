@@ -20,7 +20,7 @@ let inactivityInterval; // move this to global scope
 // Nostaleur only mode flag: when true, only tweets from username "nostaleur" will be forwarded to the webhook.
 // let nostaleurOnly = true;
 
-// Define inactivity timeout (set to 60 minutes)
+// Define inactivity timeout (set to x minutes)
 const INACTIVITY_TIMEOUT = 5400000; // 90 minutes in ms
 
 // Track the last time a tweet was received
