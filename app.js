@@ -1,6 +1,7 @@
 const { TwitterApi } = require('twitter-api-v2');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
+const http = require('http');
 
 // Load environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
@@ -25,6 +26,14 @@ let lastTweetTime       = Date.now();
 const WAIT_FOR_THREAD_MS = 6000;
 const threadBuffers      = new Map();
 
+// Boot log
+console.log(`[${new Date().toISOString()}] Service booting up, PID: ${process.pid}`);
+
+// Simple health check server
+http.createServer((_, res) => res.end('OK')).listen(8080, () => {
+  console.log(`[${new Date().toISOString()}] Health check server running on port 8080`);
+});
+
 // Force full container restart
 function forceFullRestart() {
   console.log(`[${new Date().toISOString()}] Forcing full container restart...`);
@@ -35,14 +44,12 @@ function forceFullRestart() {
 function getFullTweetText(tweet, includes) {
   let fullText = tweet.note_tweet?.text ?? tweet.text;
 
-  // Expand URLs
   (tweet.entities?.urls || []).forEach(({ url, display_url }) => {
     if (!display_url.includes('…')) {
       fullText = fullText.replace(url, display_url);
     }
   });
 
-  // Handle quoted/retweeted references
   tweet.referenced_tweets?.forEach(ref => {
     const refTweet = includes.tweets.find(t => t.id === ref.id);
     if (!refTweet) return;
@@ -73,7 +80,6 @@ async function forwardTweet(tweet, includes) {
     return;
   }
 
-  // Choose longest non-x.com URL
   const urls = tweet.entities?.urls || [];
   let expandedUrl = '';
   if (urls.length) {
@@ -95,7 +101,6 @@ async function forwardTweet(tweet, includes) {
     tweetExpandedURL: expandedUrl
   };
 
-  // Supabase insert (fire-and-forget)
   supabase
     .from('Posts')
     .insert([{
@@ -112,7 +117,6 @@ async function forwardTweet(tweet, includes) {
       else console.log(`[${new Date().toISOString()}] Logged tweet ${tweet.id} to Supabase.`);
     });
 
-  // Webhook POST
   axios.post(WEBHOOK_URL, payload)
     .then(() => console.log(`[${new Date().toISOString()}] Forwarded tweet ${tweet.id} to webhook.`))
     .catch(err => console.error(
@@ -199,7 +203,7 @@ async function startStream() {
 
   inactivityInterval = setInterval(() => {
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
-      console.error(`[${new Date().toISOString()}] No tweets for ${INACTIVITY_TIMEOUT/60000} min – restarting.`);
+      console.error(`[${new Date().toISOString()}] No tweets for ${INACTIVITY_TIMEOUT / 60000} min – restarting.`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
@@ -223,8 +227,12 @@ async function startStream() {
   } finally {
     clearInterval(inactivityInterval);
     if (streamInstance?.destroy) {
-      try { streamInstance.destroy(); }
-      catch (err) { console.error(`[${new Date().toISOString()}] Error destroying stream:`, err); }
+      try {
+        console.log(`[${new Date().toISOString()}] Destroying stream instance...`);
+        streamInstance.destroy();
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Error destroying stream:`, err);
+      }
     }
     streamInstance = null;
   }
@@ -246,26 +254,25 @@ async function runStream() {
       console.error(`[${now}] Stream error (${status || error.code || error.name}): ${error.message}`);
 
       if (status === 429) {
-        const hdrs = error.response.headers || {};
+        const hdrs = error.response?.headers || {};
         const rem  = hdrs['x-rate-limit-remaining'];
         const rst  = parseInt(hdrs['x-rate-limit-reset'], 10);
-        console.error(`[${now}] Rate limit info – remaining=${rem}, reset=${rst}`);
+        console.error(`[${now}] Rate limit headers: remaining=${rem}, reset=${rst}`);
         let waitSec = 60;
         if (!isNaN(rst)) {
           const nowSec = Math.floor(Date.now()/1000);
           waitSec = Math.max(rst - nowSec, 60);
         }
-        console.log(`[${now}] Waiting ${waitSec} s for rate-limit reset before reconnecting.`);
+        console.log(`[${now}] Waiting ${waitSec} s before reconnect.`);
         await new Promise(r => setTimeout(r, waitSec * 1000));
         continue;
       }
 
-      // Too many connections? just log
       if (error.code === 'TooManyConnections') {
-        console.error(`[${now}] Too many streaming connections; backing off.`);
+        console.error(`[${now}] Too many streaming connections; will back off.`);
       }
 
-      console.log(`[${now}] Reconnecting in ${reconnectDelay/1000} s...`);
+      console.log(`[${now}] Reconnecting in ${reconnectDelay / 1000} s...`);
       await new Promise(r => setTimeout(r, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
