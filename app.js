@@ -299,7 +299,10 @@ function shutdown() {
   process.exit(0);
 }
 
-process.on('SIGTERM', shutdown);
+process.on('SIGTERM', () => {
+  console.warn(`[${new Date().toISOString()}] ⚠️ Received SIGTERM from Railway`);
+  shutdown();
+});
 process.on('SIGINT', shutdown);
 process.on('uncaughtException', err => {
   console.error(`[${new Date().toISOString()}] Uncaught Exception:`, err);
@@ -308,13 +311,16 @@ process.on('unhandledRejection', reason => {
   console.error(`[${new Date().toISOString()}] Unhandled Rejection:`, reason);
 });
 
-// 💥 Keep-alive heartbeat
+// 💓 Keep-alive heartbeat
 setInterval(() => {
   console.log(`[${new Date().toISOString()}] Heartbeat: still alive`);
 }, 60000);
 
-// 💥 Final Entry Point: permanent while loop to prevent Railway from exiting
+// 🆕 Boot delay + run loop
 (async () => {
+  console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
+  await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
+
   while (true) {
     try {
       await runStream();
