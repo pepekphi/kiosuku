@@ -37,16 +37,18 @@ http.createServer((req, res) => {
   if (req.url === '/stats') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
-      pid: process.pid,
+      status: 'ok',
+      time: new Date().toISOString(),
       memoryMB: (process.memoryUsage().rss / 1024 / 1024).toFixed(2),
-      threadBuffers: threadBuffers.size,
+      buffers: threadBuffers.size,
       lastTweet: new Date(lastTweetTime).toISOString(),
     }));
   } else {
-    res.end('OK');
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('x-filtered-stream OK\n'); // This line keeps Railway happy
   }
 }).listen(8080, () => {
-  console.log(`[${new Date().toISOString()}] Health check active on port 8080`);
+  console.log(`[${new Date().toISOString()}] Health check server running on port 8080`);
 });
 
 // Memory logging
