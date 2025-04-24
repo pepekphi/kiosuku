@@ -15,15 +15,22 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Global variables for stream management
 let streamInstance;
 let isShuttingDown = false;
+let inactivityInterval; // move this to global scope
 
 // Nostaleur only mode flag: when true, only tweets from username "nostaleur" will be forwarded to the webhook.
 // let nostaleurOnly = true;
 
-// Define inactivity timeout (set to 60 minutes)
+// Define inactivity timeout (set to x minutes)
 const INACTIVITY_TIMEOUT = 5400000; // 90 minutes in ms
 
 // Track the last time a tweet was received
 let lastTweetTime = Date.now();
+
+// --- THREAD MERGING CONFIG ---
+const WAIT_FOR_THREAD_MS = 6000; // x milliseconds debounce per conversation. I saw it can be up to 5 seconds between sub-posts, so I made it 6000 ms for now.
+// threadBuffers maps conversationId → { tweets: [{ tweet, includes }], timeout }
+const threadBuffers = new Map();
+// -----------------------------
 
 // Function to force a full container restart by exiting the process.
 function forceFullRestart() {
@@ -63,7 +70,7 @@ function getFullTweetText(tweet, includes) {
         if (refTweet.type === "quoted") {
           let quotedUser = includes.users.find(u => u.id === referencedTweet.author_id);
           let quotedUsername = quotedUser ? quotedUser.username : "unknown";
-          fullText += ` [quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet]`;
+          fullText +=  `[quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet]`;
         } else if (refTweet.type === "retweeted") {
           let retweetedUser = includes.users.find(u => u.id === referencedTweet.author_id);
           let retweetedUsername = retweetedUser ? retweetedUser.username : "unknown";
@@ -84,11 +91,30 @@ async function forwardTweet(tweet, includes) {
   // Ensure no line breaks
   fullTweetText = fullTweetText.replace(/\n/g, ' ');
 
-  const tweetExpandedURL = tweet.entities && tweet.entities.urls && tweet.entities.urls.length > 0
-    ? tweet.entities.urls.reduce((max, current) => {
-        return current.expanded_url.length > max.expanded_url.length ? current : max;
-      }, tweet.entities.urls[0]).expanded_url
-    : "";
+  // Skip forwarding if text starts with "@"
+  if (fullTweetText.trim().startsWith('@')) {
+    console.log(`Tweet ${tweet.id} starts with '@'. Skipping forwarding.`);
+    return;
+  }
+
+  const urls = tweet.entities?.urls || [];
+  let tweetExpandedURL = "";
+  if (urls.length) {
+    const nonXUrls = urls.filter(u => {
+      try {
+        const hostname = new URL(u.expanded_url).hostname.toLowerCase();
+        return !hostname.endsWith("x.com");
+      } catch {
+        return true;
+      }
+    });
+    const candidates = nonXUrls.length ? nonXUrls : urls;
+    const longest = candidates.reduce((max, current) =>
+      current.expanded_url.length > max.expanded_url.length ? current : max,
+      candidates[0]
+    );
+    tweetExpandedURL = longest.expanded_url;
+  }
 
   const payload = {
     timestamp: tweet.created_at,
@@ -99,31 +125,105 @@ async function forwardTweet(tweet, includes) {
     tweetExpandedURL,
   };
 
-  try {
-    // 1) Send to Google Apps Script webhook
-    await axios.post(WEBHOOK_URL, payload);
-    console.log(`Tweet ${tweet.id} forwarded to webhook.`);
+  // Insert into Supabase (fire-and-forget)
+  supabase
+    .from('Posts')
+    .insert([{
+      post_id:         tweet.id,
+      post_timestamp: tweet.created_at,
+      added_timestamp: new Date().toISOString(),
+      x_id:            username,
+      conversation_id: tweet.conversation_id,
+      text:            fullTweetText,
+      expanded_url:    tweetExpandedURL
+    }])
+    .then(({ error }) => {
+      if (error) console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
+      else console.log(`Tweet ${tweet.id} logged to Supabase.`);
+    })
+    .catch(err => {
+      console.error(`Error inserting tweet ${tweet.id} into Supabase:`, err.message);
+    });
 
-    // 2) Insert into Supabase
-    const { error } = await supabase
-      .from('Posts')
-      .insert([{
-        post_id:       tweet.id,
-        timestamp:     tweet.created_at,
-        x_id:          username,
-        conversation_id: tweet.conversation_id,
-        text:          fullTweetText,
-        expanded_url:  tweetExpandedURL,
-      }]);
+  // Send to Google Apps Script webhook (fire-and-forget)
+  axios.post(WEBHOOK_URL, payload)
+    .then(() => {
+      console.log(`Tweet ${tweet.id} forwarded to webhook.`);
+    })
+    .catch(err => {
+      console.error(`Error forwarding tweet ${tweet.id} to webhook:`, err.response?.data || err.message);
+    });
+}
 
-    if (error) {
-      console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
-    } else {
-      console.log(`Tweet ${tweet.id} logged to Supabase.`);
-    }
+// Called when a buffered thread has “quieted down” for WAIT_FOR_THREAD_MS
+async function flushThread(conversationId) {
+  const buffer = threadBuffers.get(conversationId);
+  if (!buffer) return;
+  clearTimeout(buffer.timeout);
 
-  } catch (err) {
-    console.error(`Error handling tweet ${tweet.id}:`, err.response?.data || err.message);
+  // Sort tweets by numeric ID ascending
+  buffer.tweets.sort((a, b) => (BigInt(a.tweet.id) < BigInt(b.tweet.id) ? -1 : 1));
+
+  // Merge their texts
+  const mergedText = buffer.tweets
+    .map(({ tweet, includes }) => getFullTweetText(tweet, includes).replace(/\n/g, ' '))
+    .join(' ');
+
+  // Use the root conversationId as tweetId
+  const first = buffer.tweets[0];
+  const user = first.includes.users.find(u => u.id === first.tweet.author_id);
+  const username = user ? user.username : 'unknown';
+
+  const payload = { timestamp: first.tweet.created_at, username, tweetId: conversationId, conversationId, tweetText: mergedText, tweetExpandedURL: '' };
+
+  supabase
+    .from('Posts')
+    .insert([{
+      post_id:         conversationId,
+      post_timestamp:       first.tweet.created_at,
+      added_timestamp: new Date().toISOString(),
+      x_id:            username,
+      conversation_id: conversationId,
+      text:            mergedText,
+      expanded_url:    '',
+      is_possible_thread:       true,
+    }])
+    .then(({ error }) => {
+      if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
+      else console.log(`Thread ${conversationId} logged to Supabase.`);
+    })
+    .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
+  
+  axios.post(WEBHOOK_URL, payload)
+    .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
+    .catch(err => console.error(`Error forwarding thread ${conversationId}:`, err.message));
+
+  threadBuffers.delete(conversationId);
+}
+
+// New handler that decides whether to buffer or forward immediately
+function handleTweet(tweet, includes) {
+  const conversationId = tweet.conversation_id;
+  const isRoot = conversationId === tweet.id;
+  const text = tweet.note_tweet?.text || tweet.text;
+  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|\bthread\b|👇)/i.test(text);
+
+  // If already buffering this conversation, keep buffering
+  if (threadBuffers.has(conversationId)) {
+    const buf = threadBuffers.get(conversationId);
+    buf.tweets.push({ tweet, includes });
+    clearTimeout(buf.timeout);
+    buf.timeout = setTimeout(() => flushThread(conversationId), WAIT_FOR_THREAD_MS);
+  }
+  // Otherwise, if this is a root tweet indicating a thread, start buffering
+  else if (isRoot && threadIndicator) {
+    threadBuffers.set(conversationId, { tweets: [{ tweet, includes }], timeout: null });
+    const buf = threadBuffers.get(conversationId);
+    buf.timeout = setTimeout(() => flushThread(conversationId), WAIT_FOR_THREAD_MS);
+  }
+  // Otherwise, normal tweet → immediate forward
+  else {
+    forwardTweet(tweet, includes);
   }
 }
 
@@ -134,44 +234,29 @@ async function startStream() {
     return;
   }
 
-  // Set up a recurring check for inactivity every minute
   const inactivityInterval = setInterval(() => {
-    // If 60 minutes have passed without receiving any tweets, force a full restart.
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
       console.log(`No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
-  }, 60000); // check every minute
+  }, 60000);
 
   try {
     streamInstance = await twitterClient.v2.searchStream({
       'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
       'user.fields': 'username',
-      expansions: 'author_id,referenced_tweets.id'
+      expansions: 'author_id,referenced_tweets.id',
     });
 
     console.log('Connected to Twitter stream.');
-    // Update the last tweet time on connection
     lastTweetTime = Date.now();
 
     for await (const { data, includes } of streamInstance) {
-      lastTweetTime = Date.now(); // update on each tweet
-      const usernameForLog = (includes && includes.users && includes.users[0])
-        ? includes.users[0].username
-        : "unknown";
+      lastTweetTime = Date.now();
+      const usernameForLog = (includes?.users?.[0]?.username) || "unknown";
       console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
-      await forwardTweet(data, includes);
-    }
-  } catch (error) {
-    if (error && error.code === 429) {
-      console.error("Received 429 error. Forcing full container restart now.");
-      clearInterval(inactivityInterval);
-      forceFullRestart();
-    } else if (error && error.name === 'AbortError') {
-      console.log('Stream aborted.');
-    } else {
-      console.error('Stream error:', error);
+      handleTweet(data, includes);
     }
   } finally {
     clearInterval(inactivityInterval);
@@ -186,20 +271,44 @@ async function startStream() {
   }
 }
 
-// Function to manage reconnections; runs until a shutdown is requested.
+// Function to manage reconnections
 async function runStream() {
-  let reconnectDelay = 30000; // initial delay 30 seconds for non-rate-limit errors
+  let reconnectDelay = 30000;
+  const maxDelay = 300000; // max 5 minutes
+
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30000;
+      reconnectDelay = 30000; // reset delay after a successful stream
     } catch (error) {
-      if (error && error.code === 429) {
-        console.error("Received 429 error in runStream. Forcing full container restart now.");
+      const isTooManyConnections = error?.code === 'TooManyConnections';
+      const isTooManyRequests = error?.response?.status === 429;
+
+      if (isTooManyRequests) {
+        const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
+        const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
+
+        if (remaining === 0 && reset) {
+          const now = Math.floor(Date.now() / 1000);
+          const waitTime = reset - now;
+          const delay = Math.max(waitTime, 60);
+          console.error(`Rate limit exceeded. Waiting ${delay} seconds until reset.`);
+          await new Promise(res => setTimeout(res, delay * 1000));
+          continue;
+        }
+
+        console.error("Hard 429 limit hit. Forcing container restart.");
         forceFullRestart();
       }
-      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay / 1000} seconds...`);
-      await new Promise(resolve => setTimeout(resolve, reconnectDelay));
+
+      if (isTooManyConnections) {
+        console.error("Too many streaming connections.");
+        // fall through to backoff logic below
+      }
+
+      console.error(`Stream failed (${error?.code || error?.name || 'unknown'}). Reconnecting in ${reconnectDelay / 1000} seconds...`);
+      await new Promise(res => setTimeout(res, reconnectDelay));
+      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
   }
 }
@@ -211,6 +320,7 @@ function shutdown() {
   if (streamInstance && typeof streamInstance.destroy === 'function') {
     streamInstance.destroy();
   }
+  if (inactivityInterval) clearInterval(inactivityInterval);
   process.exit(0);
 }
 
