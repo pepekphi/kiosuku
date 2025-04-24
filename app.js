@@ -3,80 +3,88 @@ const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const http = require('http');
 
-// Load environment variables
+// Load and validate environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
 const WEBHOOK_URL          = process.env.WEBHOOK_URL;
 const SUPABASE_URL         = process.env.SUPABASE_URL;
 const SUPABASE_KEY         = process.env.SUPABASE_KEY;
 
-// Create clients
+if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
+  console.error(`[${new Date().toISOString()}] Missing one or more required environment variables.`);
+  process.exit(1);
+}
+
+// Clients
 const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
 const supabase      = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Global variables for stream management
+// Globals
 let streamInstance;
 let isShuttingDown    = false;
 let inactivityInterval;
 
-// Define inactivity timeout (90 minutes)
-const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
-let lastTweetTime       = Date.now();
+const INACTIVITY_TIMEOUT  = 90 * 60 * 1000;
+const WAIT_FOR_THREAD_MS  = 6000;
+const MAX_TWEETS_PER_THREAD = 20;
+let lastTweetTime         = Date.now();
+const threadBuffers       = new Map();
 
-// THREAD MERGING CONFIG
-const WAIT_FOR_THREAD_MS = 6000;
-const threadBuffers      = new Map();
+console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
-// Boot log
-console.log(`[${new Date().toISOString()}] Service booting up, PID: ${process.pid}`);
-
-// Simple health check server
+// Health check
 http.createServer((_, res) => res.end('OK')).listen(8080, () => {
-  console.log(`[${new Date().toISOString()}] Health check server running on port 8080`);
+  console.log(`[${new Date().toISOString()}] Health check active on port 8080`);
 });
 
-// Force full container restart
+// Memory & buffer stats
+setInterval(() => {
+  const usedMB = (process.memoryUsage().rss / 1024 / 1024).toFixed(2);
+  console.log(`[${new Date().toISOString()}] Memory: ${usedMB} MB | Active buffers: ${threadBuffers.size}`);
+}, 300000);
+
+// Force restart
 function forceFullRestart() {
-  console.log(`[${new Date().toISOString()}] Forcing full container restart...`);
+  console.log(`[${new Date().toISOString()}] Forcing container restart`);
   process.exit(1);
 }
 
-// Build full tweet text (handles note_tweet, URLs, threads)
+// Build tweet text
 function getFullTweetText(tweet, includes) {
-  let fullText = tweet.note_tweet?.text ?? tweet.text;
-
+  let text = tweet.note_tweet?.text ?? tweet.text;
   (tweet.entities?.urls || []).forEach(({ url, display_url }) => {
     if (!display_url.includes('…')) {
-      fullText = fullText.replace(url, display_url);
+      text = text.replace(url, display_url);
     }
   });
 
   tweet.referenced_tweets?.forEach(ref => {
     const refTweet = includes.tweets.find(t => t.id === ref.id);
     if (!refTweet) return;
-    let txt = refTweet.note_tweet?.text ?? refTweet.text;
+    let refText = refTweet.note_tweet?.text ?? refTweet.text;
     (refTweet.entities?.urls || []).forEach(({ url, display_url }) => {
-      if (!display_url.includes('…')) txt = txt.replace(url, display_url);
+      if (!display_url.includes('…')) refText = refText.replace(url, display_url);
     });
-    const user   = includes.users.find(u => u.id === refTweet.author_id);
+    const user = includes.users.find(u => u.id === refTweet.author_id);
     const handle = user?.username || 'unknown';
-    if (ref.type === 'quoted') {
-      fullText += ` [quoted @${handle}]${txt}[/quoted]`;
-    } else if (ref.type === 'retweeted') {
-      fullText = `RT @${handle} ${txt}`;
-    }
+    if (ref.type === 'quoted') text += ` [quoted @${handle}]${refText}[/quoted]`;
+    if (ref.type === 'retweeted') text = `RT @${handle} ${refText}`;
   });
 
-  return fullText.replace(/\n/g, ' ');
+  return text.replace(/\n/g, ' ');
 }
 
-// Forward a single tweet to Supabase + webhook
+// Forward single tweet
 async function forwardTweet(tweet, includes) {
+  if (!tweet || !includes || !includes.users) {
+    console.warn(`[${new Date().toISOString()}] Skipping malformed tweet`);
+    return;
+  }
+
   const user     = includes.users.find(u => u.id === tweet.author_id);
   const username = user?.username ?? 'unknown';
   const text     = getFullTweetText(tweet, includes);
-
   if (text.trim().startsWith('@')) {
-    console.log(`[${new Date().toISOString()}] Skipping @-reply tweet ${tweet.id}`);
+    console.log(`[${new Date().toISOString()}] Skipping @ tweet ${tweet.id}`);
     return;
   }
 
@@ -88,207 +96,203 @@ async function forwardTweet(tweet, includes) {
         return !new URL(u.expanded_url).hostname.endsWith('x.com');
       } catch { return true; }
     });
-    const choose = nonX.length ? nonX : urls;
-    expandedUrl = choose.reduce((a, b) => b.expanded_url.length > a.expanded_url.length ? b : a).expanded_url;
+    const pick = nonX.length ? nonX : urls;
+    expandedUrl = pick.reduce((a, b) => b.expanded_url.length > a.expanded_url.length ? b : a).expanded_url;
   }
 
   const payload = {
-    timestamp:       tweet.created_at,
+    timestamp: tweet.created_at,
     username,
-    tweetId:         tweet.id,
-    conversationId:  tweet.conversation_id,
-    tweetText:       text,
-    tweetExpandedURL: expandedUrl
+    tweetId: tweet.id,
+    conversationId: tweet.conversation_id,
+    tweetText: text,
+    tweetExpandedURL: expandedUrl,
   };
 
   supabase
     .from('Posts')
     .insert([{
-      post_id:         tweet.id,
-      post_timestamp:  tweet.created_at,
+      post_id: tweet.id,
+      post_timestamp: tweet.created_at,
       added_timestamp: new Date().toISOString(),
-      x_id:            username,
+      x_id: username,
       conversation_id: tweet.conversation_id,
       text,
-      expanded_url:    expandedUrl
+      expanded_url: expandedUrl
     }])
     .then(({ error }) => {
-      if (error) console.error(`[${new Date().toISOString()}] Supabase error:`, error.message);
-      else console.log(`[${new Date().toISOString()}] Logged tweet ${tweet.id} to Supabase.`);
+      if (error) console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
+      else console.log(`[${new Date().toISOString()}] Supabase log OK for tweet ${tweet.id}`);
     });
 
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(`[${new Date().toISOString()}] Forwarded tweet ${tweet.id} to webhook.`))
-    .catch(err => console.error(
-      `[${new Date().toISOString()}] Webhook error for ${tweet.id}:`,
-      err.response?.data || err.message
-    ));
+    .then(() => console.log(`[${new Date().toISOString()}] Webhook sent for tweet ${tweet.id}`))
+    .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
 }
 
-// Flush a buffered thread
+// Flush a thread
 async function flushThread(conversationId) {
   const buf = threadBuffers.get(conversationId);
   if (!buf) return;
   clearTimeout(buf.timeout);
 
   buf.tweets.sort((a, b) => BigInt(a.tweet.id) < BigInt(b.tweet.id) ? -1 : 1);
-  const merged = buf.tweets
-    .map(({ tweet, includes }) => getFullTweetText(tweet, includes))
-    .join(' ');
+  const merged = buf.tweets.map(({ tweet, includes }) => getFullTweetText(tweet, includes)).join(' ');
   const first  = buf.tweets[0];
   const user   = first.includes.users.find(u => u.id === first.tweet.author_id);
   const name   = user?.username ?? 'unknown';
 
   const payload = {
-    timestamp:       first.tweet.created_at,
-    username:        name,
-    tweetId:         conversationId,
+    timestamp: first.tweet.created_at,
+    username: name,
+    tweetId: conversationId,
     conversationId,
-    tweetText:       merged,
+    tweetText: merged,
     tweetExpandedURL: ''
   };
 
   supabase
     .from('Posts')
     .insert([{
-      post_id:             conversationId,
-      post_timestamp:      first.tweet.created_at,
-      added_timestamp:     new Date().toISOString(),
-      x_id:                name,
-      conversation_id:     conversationId,
-      text:                merged,
-      expanded_url:        '',
-      is_possible_thread:  true
+      post_id: conversationId,
+      post_timestamp: first.tweet.created_at,
+      added_timestamp: new Date().toISOString(),
+      x_id: name,
+      conversation_id: conversationId,
+      text: merged,
+      expanded_url: '',
+      is_possible_thread: true
     }])
     .then(({ error }) => {
-      if (error) console.error(`[${new Date().toISOString()}] Supabase thread error:`, error.message);
-      else console.log(`[${new Date().toISOString()}] Logged thread ${conversationId}.`);
+      if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
+      else console.log(`[${new Date().toISOString()}] Thread logged: ${conversationId}`);
     });
 
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(`[${new Date().toISOString()}] Forwarded thread ${conversationId}.`))
+    .then(() => console.log(`[${new Date().toISOString()}] Webhook sent for thread ${conversationId}`))
     .catch(err => console.error(`[${new Date().toISOString()}] Thread webhook error:`, err.message));
 
   threadBuffers.delete(conversationId);
 }
 
-// Decide buffering vs immediate forward
+// Handle new tweet
 function handleTweet(tweet, includes) {
-  const convId      = tweet.conversation_id;
-  const isRoot      = convId === tweet.id;
-  const text        = tweet.note_tweet?.text || tweet.text;
-  const isThreadOp  = /(?:1\/(?:\d+|x)|🧵|\bthread\b|👇)/i.test(text);
+  const convId = tweet.conversation_id;
+  const isRoot = convId === tweet.id;
+  const text = tweet.note_tweet?.text || tweet.text;
+  const isThreadOpener = /(?:1\/(?:\d+|x)|🧵|\bthread\b|👇)/i.test(text);
 
   if (threadBuffers.has(convId)) {
-    const b = threadBuffers.get(convId);
-    b.tweets.push({ tweet, includes });
-    clearTimeout(b.timeout);
-    b.timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
-  }
-  else if (isRoot && isThreadOp) {
+    const buf = threadBuffers.get(convId);
+    buf.tweets.push({ tweet, includes });
+    if (buf.tweets.length >= MAX_TWEETS_PER_THREAD) {
+      console.warn(`[${new Date().toISOString()}] Thread ${convId} hit limit. Flushing early.`);
+      flushThread(convId);
+      return;
+    }
+    clearTimeout(buf.timeout);
+    buf.timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
+  } else if (isRoot && isThreadOpener) {
     const timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
     threadBuffers.set(convId, { tweets: [{ tweet, includes }], timeout });
-  }
-  else {
+  } else {
     forwardTweet(tweet, includes);
   }
 }
 
-// Start streaming + inactivity watchdog
+// Stream startup
 async function startStream() {
   if (streamInstance) {
-    console.log(`[${new Date().toISOString()}] Stream already active.`);
+    console.log(`[${new Date().toISOString()}] Stream already running`);
     return;
   }
 
   inactivityInterval = setInterval(() => {
-    if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
-      console.error(`[${new Date().toISOString()}] No tweets for ${INACTIVITY_TIMEOUT / 60000} min – restarting.`);
+    if (Date.now() - lastTweetTime > INACTIVITY_TIMEOUT) {
+      console.warn(`[${new Date().toISOString()}] Inactive for too long, restarting`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
-  }, 60 * 1000);
+  }, 60000);
 
   try {
     streamInstance = await twitterClient.v2.searchStream({
-      'tweet.fields':      'created_at,conversation_id,note_tweet,referenced_tweets,entities',
-      'user.fields':       'username',
-      expansions:          'author_id,referenced_tweets.id'
+      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
+      'user.fields': 'username',
+      expansions: 'author_id,referenced_tweets.id'
     });
-    console.log(`[${new Date().toISOString()}] Connected to Twitter stream.`);
+    console.log(`[${new Date().toISOString()}] Connected to Twitter stream`);
     lastTweetTime = Date.now();
 
     for await (const { data, includes } of streamInstance) {
       lastTweetTime = Date.now();
-      const userLog = includes?.users?.[0]?.username ?? 'unknown';
-      console.log(`[${new Date().toISOString()}] New tweet ${data.id} from @${userLog}`);
+      const logUser = includes?.users?.[0]?.username ?? 'unknown';
+      console.log(`[${new Date().toISOString()}] Tweet ${data.id} from @${logUser}`);
       handleTweet(data, includes);
     }
   } finally {
     clearInterval(inactivityInterval);
     if (streamInstance?.destroy) {
       try {
-        console.log(`[${new Date().toISOString()}] Destroying stream instance...`);
         streamInstance.destroy();
-      } catch (err) {
-        console.error(`[${new Date().toISOString()}] Error destroying stream:`, err);
+        console.log(`[${new Date().toISOString()}] Stream destroyed`);
+      } catch (e) {
+        console.error(`[${new Date().toISOString()}] Stream destroy error`, e);
       }
     }
     streamInstance = null;
   }
 }
 
-// Manage reconnections with backoff
+// Run stream loop with retries
 async function runStream() {
-  let reconnectDelay = 30 * 1000;
-  const maxDelay    = 5 * 60 * 1000;
+  let reconnectDelay = 30000;
+  const maxDelay = 300000;
+  let attempts = 0;
+  const maxAttempts = 10;
 
-  while (!isShuttingDown) {
+  while (!isShuttingDown && attempts < maxAttempts) {
+    attempts++;
+    console.log(`[${new Date().toISOString()}] Stream attempt #${attempts}`);
     try {
       await startStream();
-      reconnectDelay = 30 * 1000;
-    }
-    catch (error) {
+      reconnectDelay = 30000;
+      attempts = 0;
+    } catch (err) {
       const now = new Date().toISOString();
-      const status = error.response?.status;
-      console.error(`[${now}] Stream error (${status || error.code || error.name}): ${error.message}`);
-
+      const status = err.response?.status;
+      console.error(`[${now}] Stream error (${status || err.code || err.name}): ${err.message}`);
       if (status === 429) {
-        const hdrs = error.response?.headers || {};
-        const rem  = hdrs['x-rate-limit-remaining'];
-        const rst  = parseInt(hdrs['x-rate-limit-reset'], 10);
-        console.error(`[${now}] Rate limit headers: remaining=${rem}, reset=${rst}`);
-        let waitSec = 60;
-        if (!isNaN(rst)) {
-          const nowSec = Math.floor(Date.now()/1000);
-          waitSec = Math.max(rst - nowSec, 60);
-        }
-        console.log(`[${now}] Waiting ${waitSec} s before reconnect.`);
-        await new Promise(r => setTimeout(r, waitSec * 1000));
+        const headers = err.response?.headers || {};
+        const reset = parseInt(headers['x-rate-limit-reset'], 10);
+        const nowSec = Math.floor(Date.now() / 1000);
+        const wait = Math.max((reset || nowSec + 60) - nowSec, 60);
+        console.warn(`[${now}] Rate limit hit. Waiting ${wait} seconds.`);
+        await new Promise(r => setTimeout(r, wait * 1000));
         continue;
       }
-
-      if (error.code === 'TooManyConnections') {
-        console.error(`[${now}] Too many streaming connections; will back off.`);
-      }
-
-      console.log(`[${now}] Reconnecting in ${reconnectDelay / 1000} s...`);
+      console.log(`[${now}] Retry in ${reconnectDelay / 1000}s`);
       await new Promise(r => setTimeout(r, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
+  }
+
+  if (attempts >= maxAttempts) {
+    console.error(`[${new Date().toISOString()}] Max stream attempts reached. Restarting.`);
+    forceFullRestart();
   }
 }
 
 // Graceful shutdown
 function shutdown() {
   isShuttingDown = true;
-  console.log(`[${new Date().toISOString()}] Shutdown initiated.`);
+  console.log(`[${new Date().toISOString()}] Shutdown initiated`);
   streamInstance?.destroy();
   clearInterval(inactivityInterval);
   process.exit(0);
 }
 
 process.on('SIGTERM', shutdown);
-process.on('SIGINT',  shutdown);
+process.on('SIGINT', shutdown);
 
 runStream();
