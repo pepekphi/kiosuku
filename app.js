@@ -2,6 +2,7 @@ const { TwitterApi } = require('twitter-api-v2');
 const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const http = require('http');
+let softRateLimitUntil = null;
 
 // Load env vars
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
@@ -238,8 +239,10 @@ async function runStream() {
   const maxAttempts = 10;
 
   while (!isShuttingDown && attempts < maxAttempts) {
+    // 💡 Soft rate limit mode - throttle retries for 15 min
     if (softRateLimit) {
-      console.warn(`[${new Date().toISOString()}] Soft rate limit active. Sleeping 60s.`);
+      const remaining = softRateLimitUntil ? ((softRateLimitUntil - Date.now()) / 1000).toFixed(0) : 'unknown';
+      console.warn(`[${new Date().toISOString()}] Soft rate limit active. Sleeping 60s. (${remaining}s left)`);
       await new Promise(r => setTimeout(r, 60000));
       continue;
     }
@@ -266,12 +269,19 @@ async function runStream() {
         const reset = parseInt(headers['x-rate-limit-reset'], 10);
         const nowSec = Math.floor(Date.now() / 1000);
         const wait = Math.max((reset || nowSec + 60) - nowSec, 60);
-        console.warn(`[${now}] Twitter 429. Activating soft rate limit for 15min. Waiting ${wait}s.`);
+        const backoffUntil = Date.now() + 15 * 60 * 1000;
+
+        console.warn(`[${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()}`);
+        
         softRateLimit = true;
+        softRateLimitUntil = backoffUntil;
+
         setTimeout(() => {
           softRateLimit = false;
+          softRateLimitUntil = null;
           console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
         }, 15 * 60 * 1000);
+
         await new Promise(r => setTimeout(r, wait * 1000));
         continue;
       }
