@@ -290,6 +290,7 @@ async function runStream() {
   }
 }
 
+// Graceful shutdown
 function shutdown() {
   isShuttingDown = true;
   console.log(`[${new Date().toISOString()}] Shutdown signal received`);
@@ -307,11 +308,20 @@ process.on('unhandledRejection', reason => {
   console.error(`[${new Date().toISOString()}] Unhandled Rejection:`, reason);
 });
 
+// 💥 Keep-alive heartbeat
+setInterval(() => {
+  console.log(`[${new Date().toISOString()}] Heartbeat: still alive`);
+}, 60000);
+
+// 💥 Final Entry Point: permanent while loop to prevent Railway from exiting
 (async () => {
-  try {
-    await runStream();
-  } catch (err) {
-    console.error(`[${new Date().toISOString()}] FATAL runStream error:`, err);
-    process.exit(1);
+  while (true) {
+    try {
+      await runStream();
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] runStream error:`, err);
+    }
+    console.log(`[${new Date().toISOString()}] Restarting runStream in 10s...`);
+    await new Promise(r => setTimeout(r, 10000));
   }
 })();
