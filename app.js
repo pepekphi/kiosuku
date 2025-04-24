@@ -274,41 +274,40 @@ async function startStream() {
 // Function to manage reconnections
 async function runStream() {
   let reconnectDelay = 30000;
-  const maxDelay = 300000; // max 5 minutes
+  const maxDelay = 300000; // 5 minutes
 
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30000; // reset delay after a successful stream
+      reconnectDelay = 30000; // reset after a successful stream
     } catch (error) {
-      const isTooManyConnections = error?.code === 'TooManyConnections';
-      const isTooManyRequests = error?.response?.status === 429;
+      const status = error.response?.status;
+      const headers = error.response?.headers || {};
+      const data = error.response?.data || {};
 
-      if (isTooManyRequests) {
-        const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
-        const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
-
-        if (remaining === 0 && reset) {
-          const now = Math.floor(Date.now() / 1000);
-          const waitTime = reset - now;
-          const delay = Math.max(waitTime, 60);
-          console.error(`Rate limit exceeded. Waiting ${delay} seconds until reset.`);
-          await new Promise(res => setTimeout(res, delay * 1000));
-          continue;
-        }
-
-        console.error("Hard 429 limit hit. Forcing container restart.");
-        forceFullRestart();
+      // 1) Too many connections
+      if (data.connection_issue === 'TooManyConnections') {
+        console.error('Exceeded connection limit. Waiting 1 minute before retry.');
+        await new Promise(r => setTimeout(r, 60000));
+        continue;
       }
 
-      if (isTooManyConnections) {
-        console.error("Too many streaming connections.");
-        // fall through to backoff logic below
+      // 2) Rate-limited by endpoint
+      if (status === 429) {
+        const reset = Number(headers['x-rate-limit-reset']) * 1000;
+        const now   = Date.now();
+        const wait  = reset > now ? reset - now + 1000 : reconnectDelay;
+
+        console.error(`Rate limit hit. Next reset at ${new Date(reset).toISOString()}. Waiting ${Math.ceil(wait/1000)}s.`);
+        await new Promise(r => setTimeout(r, wait));
+        reconnectDelay = Math.min(maxDelay, reconnectDelay * 2);
+        continue;
       }
 
-      console.error(`Stream failed (${error?.code || error?.name || 'unknown'}). Reconnecting in ${reconnectDelay / 1000} seconds...`);
-      await new Promise(res => setTimeout(res, reconnectDelay));
-      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+      // 3) All other errors → exponential back-off
+      console.error(`Stream failed (${error.code||error.name||status}). Reconnecting in ${reconnectDelay/1000}s...`);
+      await new Promise(r => setTimeout(r, reconnectDelay));
+      reconnectDelay = Math.min(maxDelay, reconnectDelay * 2);
     }
   }
 }
