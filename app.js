@@ -22,17 +22,17 @@ const supabase      = createClient(SUPABASE_URL, SUPABASE_KEY);
 let streamInstance;
 let isShuttingDown    = false;
 let inactivityInterval;
+let softRateLimit     = false;
 
 const INACTIVITY_TIMEOUT     = 90 * 60 * 1000;
 const WAIT_FOR_THREAD_MS     = 6000;
 const MAX_TWEETS_PER_THREAD  = 20;
 let lastTweetTime            = Date.now();
 const threadBuffers          = new Map();
-let softRateLimit            = false;
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
-// Health check
+// Health check + stats endpoint
 http.createServer((req, res) => {
   if (req.url === '/stats') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -49,7 +49,7 @@ http.createServer((req, res) => {
   console.log(`[${new Date().toISOString()}] Health check active on port 8080`);
 });
 
-// Memory & buffer stats
+// Memory log
 setInterval(() => {
   const usedMB = (process.memoryUsage().rss / 1024 / 1024).toFixed(2);
   console.log(`[${new Date().toISOString()}] Memory: ${usedMB} MB | Active buffers: ${threadBuffers.size}`);
@@ -86,7 +86,7 @@ function getFullTweetText(tweet, includes) {
   return text.replace(/\n/g, ' ');
 }
 
-// Forward single tweet
+// Forward tweet
 async function forwardTweet(tweet, includes) {
   if (!tweet || !includes || !includes.users) {
     console.warn(`[${new Date().toISOString()}] Skipping malformed tweet`);
@@ -143,7 +143,7 @@ async function forwardTweet(tweet, includes) {
     .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
 }
 
-// Flush a thread
+// Flush thread
 async function flushThread(conversationId) {
   const buf = threadBuffers.get(conversationId);
   if (!buf) return;
@@ -188,7 +188,7 @@ async function flushThread(conversationId) {
   threadBuffers.delete(conversationId);
 }
 
-// Handle new tweet
+// Handle tweet
 function handleTweet(tweet, includes) {
   const convId = tweet.conversation_id;
   const isRoot = convId === tweet.id;
@@ -257,7 +257,7 @@ async function startStream() {
   }
 }
 
-// Run stream loop with retries and soft rate limit
+// Run stream loop
 async function runStream() {
   let reconnectDelay = 30000;
   const maxDelay = 300000;
@@ -293,7 +293,7 @@ async function runStream() {
         setTimeout(() => {
           softRateLimit = false;
           console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
-        }, 15 * 60 * 1000); // 15 minutes
+        }, 15 * 60 * 1000);
         await new Promise(r => setTimeout(r, wait * 1000));
         continue;
       }
@@ -326,4 +326,15 @@ function shutdown() {
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
-runStream();
+// Global error handlers
+process.on('uncaughtException', err => {
+  console.error(`[${new Date().toISOString()}] Uncaught Exception:`, err);
+});
+process.on('unhandledRejection', reason => {
+  console.error(`[${new Date().toISOString()}] Unhandled Rejection:`, reason);
+});
+
+runStream().catch(err => {
+  console.error(`[${new Date().toISOString()}] runStream() failed:`, err);
+  process.exit(1);
+});
