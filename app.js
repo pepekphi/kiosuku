@@ -273,14 +273,20 @@ async function runStream() {
 
         console.warn(`[${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()}`);
         
-        softRateLimit = true;
-        softRateLimitUntil = backoffUntil;
+        if (!softRateLimit) {
+          softRateLimit = true;
+          softRateLimitUntil = backoffUntil;
 
-        setTimeout(() => {
-          softRateLimit = false;
-          softRateLimitUntil = null;
-          console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
-        }, 15 * 60 * 1000);
+          console.warn(`[${now}] Activating soft rate limit until ${new Date(backoffUntil).toISOString()}`);
+
+          setTimeout(() => {
+            softRateLimit = false;
+            softRateLimitUntil = null;
+            console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
+          }, 15 * 60 * 1000);
+        } else {
+          console.warn(`[${now}] 429 received during soft limit. Already backing off until ${new Date(softRateLimitUntil).toISOString()}`);
+        }
 
         await new Promise(r => setTimeout(r, wait * 1000));
         continue;
