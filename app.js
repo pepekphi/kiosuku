@@ -23,16 +23,29 @@ let streamInstance;
 let isShuttingDown    = false;
 let inactivityInterval;
 
-const INACTIVITY_TIMEOUT  = 90 * 60 * 1000;
-const WAIT_FOR_THREAD_MS  = 6000;
-const MAX_TWEETS_PER_THREAD = 20;
-let lastTweetTime         = Date.now();
-const threadBuffers       = new Map();
+const INACTIVITY_TIMEOUT     = 90 * 60 * 1000;
+const WAIT_FOR_THREAD_MS     = 6000;
+const MAX_TWEETS_PER_THREAD  = 20;
+let lastTweetTime            = Date.now();
+const threadBuffers          = new Map();
+let softRateLimit            = false;
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
 // Health check
-http.createServer((_, res) => res.end('OK')).listen(8080, () => {
+http.createServer((req, res) => {
+  if (req.url === '/stats') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      pid: process.pid,
+      memoryMB: (process.memoryUsage().rss / 1024 / 1024).toFixed(2),
+      threadBuffers: threadBuffers.size,
+      lastTweet: new Date(lastTweetTime).toISOString(),
+    }));
+  } else {
+    res.end('OK');
+  }
+}).listen(8080, () => {
   console.log(`[${new Date().toISOString()}] Health check active on port 8080`);
 });
 
@@ -200,7 +213,7 @@ function handleTweet(tweet, includes) {
   }
 }
 
-// Stream startup
+// Start stream
 async function startStream() {
   if (streamInstance) {
     console.log(`[${new Date().toISOString()}] Stream already running`);
@@ -244,7 +257,7 @@ async function startStream() {
   }
 }
 
-// Run stream loop with retries
+// Run stream loop with retries and soft rate limit
 async function runStream() {
   let reconnectDelay = 30000;
   const maxDelay = 300000;
@@ -252,8 +265,15 @@ async function runStream() {
   const maxAttempts = 10;
 
   while (!isShuttingDown && attempts < maxAttempts) {
+    if (softRateLimit) {
+      console.warn(`[${new Date().toISOString()}] Soft rate limit active. Delaying reconnect by 60s.`);
+      await new Promise(r => setTimeout(r, 60000));
+      continue;
+    }
+
     attempts++;
     console.log(`[${new Date().toISOString()}] Stream attempt #${attempts}`);
+
     try {
       await startStream();
       reconnectDelay = 30000;
@@ -262,15 +282,26 @@ async function runStream() {
       const now = new Date().toISOString();
       const status = err.response?.status;
       console.error(`[${now}] Stream error (${status || err.code || err.name}): ${err.message}`);
+
       if (status === 429) {
         const headers = err.response?.headers || {};
         const reset = parseInt(headers['x-rate-limit-reset'], 10);
         const nowSec = Math.floor(Date.now() / 1000);
         const wait = Math.max((reset || nowSec + 60) - nowSec, 60);
-        console.warn(`[${now}] Rate limit hit. Waiting ${wait} seconds.`);
+        console.warn(`[${now}] Twitter 429 received. Applying soft rate limit for 15 min. Waiting ${wait}s.`);
+        softRateLimit = true;
+        setTimeout(() => {
+          softRateLimit = false;
+          console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
+        }, 15 * 60 * 1000); // 15 minutes
         await new Promise(r => setTimeout(r, wait * 1000));
         continue;
       }
+
+      if (err.code === 'TooManyConnections') {
+        console.warn(`[${now}] Too many Twitter connections. Backing off.`);
+      }
+
       console.log(`[${now}] Retry in ${reconnectDelay / 1000}s`);
       await new Promise(r => setTimeout(r, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
