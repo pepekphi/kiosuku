@@ -325,6 +325,7 @@ async function runStream() {
       console.error(`[${new Date().toISOString()}] Max attempts reached. Restarting.`);
       forceFullRestart();
     }
+  }
 }
 
 // Graceful shutdown
