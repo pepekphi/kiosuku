@@ -15,12 +15,11 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 // Global variables for stream management
 let streamInstance;
 let isShuttingDown = false;
-let inactivityInterval; // move this to global scope
 
 // Nostaleur only mode flag: when true, only tweets from username "nostaleur" will be forwarded to the webhook.
 // let nostaleurOnly = true;
 
-// Define inactivity timeout (set to x minutes)
+// Define inactivity timeout (set to 60 minutes)
 const INACTIVITY_TIMEOUT = 5400000; // 90 minutes in ms
 
 // Track the last time a tweet was received
@@ -186,7 +185,7 @@ async function flushThread(conversationId) {
       conversation_id: conversationId,
       text:            mergedText,
       expanded_url:    '',
-      is_possible_thread:       true,
+      is_possible_thread: true,
     }])
     .then(({ error }) => {
       if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
@@ -206,7 +205,7 @@ function handleTweet(tweet, includes) {
   const conversationId = tweet.conversation_id;
   const isRoot = conversationId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
-  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|\bthread\b|👇)/i.test(text);
+  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|👇|\bthread\b)/i.test(text);
 
   // If already buffering this conversation, keep buffering
   if (threadBuffers.has(conversationId)) {
@@ -234,7 +233,9 @@ async function startStream() {
     return;
   }
 
+  // Set up a recurring check for inactivity every minute
   const inactivityInterval = setInterval(() => {
+    // If 60 minutes have passed without receiving any tweets, force a full restart.
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
       console.log(`No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...`);
       clearInterval(inactivityInterval);
@@ -243,20 +244,26 @@ async function startStream() {
   }, 60000);
 
   try {
-    streamInstance = await twitterClient.v2.searchStream({
-      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
-      'user.fields': 'username',
-      expansions: 'author_id,referenced_tweets.id',
-    });
+    streamInstance = await twitterClient.v2.searchStream({ 'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities', 'user.fields': 'username', expansions: 'author_id,referenced_tweets.id' });
 
     console.log('Connected to Twitter stream.');
     lastTweetTime = Date.now();
 
     for await (const { data, includes } of streamInstance) {
       lastTweetTime = Date.now();
-      const usernameForLog = (includes?.users?.[0]?.username) || "unknown";
+      const usernameForLog = (includes && includes.users && includes.users[0]) ? includes.users[0].username : "unknown";
       console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
       handleTweet(data, includes);
+    }
+  } catch (error) {
+    if (error && error.code === 429) {
+      console.error("Received 429 error. Forcing full container restart now.");
+      clearInterval(inactivityInterval);
+      forceFullRestart();
+    } else if (error && error.name === 'AbortError') {
+      console.log('Stream aborted.');
+    } else {
+      console.error('Stream error:', error);
     }
   } finally {
     clearInterval(inactivityInterval);
@@ -271,44 +278,20 @@ async function startStream() {
   }
 }
 
-// Function to manage reconnections
+// Function to manage reconnections; runs until a shutdown is requested.
 async function runStream() {
   let reconnectDelay = 30000;
-  const maxDelay = 300000; // max 5 minutes
-
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30000; // reset delay after a successful stream
+      reconnectDelay = 30000;
     } catch (error) {
-      const isTooManyConnections = error?.code === 'TooManyConnections';
-      const isTooManyRequests = error?.response?.status === 429;
-
-      if (isTooManyRequests) {
-        const remaining = Number(error?.rateLimit?.remaining ?? error?.headers?.['x-rate-limit-remaining']);
-        const reset = Number(error?.rateLimit?.reset ?? error?.headers?.['x-rate-limit-reset']);
-
-        if (remaining === 0 && reset) {
-          const now = Math.floor(Date.now() / 1000);
-          const waitTime = reset - now;
-          const delay = Math.max(waitTime, 60);
-          console.error(`Rate limit exceeded. Waiting ${delay} seconds until reset.`);
-          await new Promise(res => setTimeout(res, delay * 1000));
-          continue;
-        }
-
-        console.error("Hard 429 limit hit. Forcing container restart.");
+      if (error && error.code === 429) {
+        console.error("Received 429 error in runStream. Forcing full container restart now.");
         forceFullRestart();
       }
-
-      if (isTooManyConnections) {
-        console.error("Too many streaming connections.");
-        // fall through to backoff logic below
-      }
-
-      console.error(`Stream failed (${error?.code || error?.name || 'unknown'}). Reconnecting in ${reconnectDelay / 1000} seconds...`);
-      await new Promise(res => setTimeout(res, reconnectDelay));
-      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+      console.error(`Stream disconnected. Reconnecting in ${reconnectDelay / 1000} seconds...`);
+      await new Promise(resolve => setTimeout(resolve, reconnectDelay));
     }
   }
 }
@@ -320,7 +303,6 @@ function shutdown() {
   if (streamInstance && typeof streamInstance.destroy === 'function') {
     streamInstance.destroy();
   }
-  if (inactivityInterval) clearInterval(inactivityInterval);
   process.exit(0);
 }
 
