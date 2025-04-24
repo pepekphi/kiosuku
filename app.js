@@ -4,326 +4,284 @@ const axios = require('axios');
 
 // Load environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const WEBHOOK_URL          = process.env.WEBHOOK_URL;
+const SUPABASE_URL         = process.env.SUPABASE_URL;
+const SUPABASE_KEY         = process.env.SUPABASE_KEY;
 
 // Create clients
 const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+const supabase      = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Global variables for stream management
 let streamInstance;
-let isShuttingDown = false;
-let inactivityInterval; // move this to global scope
+let isShuttingDown    = false;
+let inactivityInterval;
 
-// Nostaleur only mode flag: when true, only tweets from username "nostaleur" will be forwarded to the webhook.
-// let nostaleurOnly = true;
+// Define inactivity timeout (90 minutes)
+const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
+let lastTweetTime       = Date.now();
 
-// Define inactivity timeout (set to x minutes)
-const INACTIVITY_TIMEOUT = 5400000; // 90 minutes in ms
+// THREAD MERGING CONFIG
+const WAIT_FOR_THREAD_MS = 6000;
+const threadBuffers      = new Map();
 
-// Track the last time a tweet was received
-let lastTweetTime = Date.now();
-
-// --- THREAD MERGING CONFIG ---
-const WAIT_FOR_THREAD_MS = 6000; // x milliseconds debounce per conversation. I saw it can be up to 5 seconds between sub-posts, so I made it 6000 ms for now.
-// threadBuffers maps conversationId → { tweets: [{ tweet, includes }], timeout }
-const threadBuffers = new Map();
-// -----------------------------
-
-// Function to force a full container restart by exiting the process.
+// Force full container restart
 function forceFullRestart() {
-  console.log("Forcing full container restart...");
+  console.log(`[${new Date().toISOString()}] Forcing full container restart...`);
   process.exit(1);
 }
 
-// Function to build the full tweet text using note_tweet and referenced tweets
+// Build full tweet text (handles note_tweet, URLs, threads)
 function getFullTweetText(tweet, includes) {
-  let fullText = tweet.note_tweet && tweet.note_tweet.text ? tweet.note_tweet.text : tweet.text;
+  let fullText = tweet.note_tweet?.text ?? tweet.text;
 
-  // Replace t.co URLs in the main tweet text with display URLs if available
-  // Only replace if the display_url does not contain an ellipsis ("…")
-  if (tweet.entities && tweet.entities.urls) {
-    tweet.entities.urls.forEach(urlEntity => {
-      if (!urlEntity.display_url.includes("…")) {
-        fullText = fullText.replace(urlEntity.url, urlEntity.display_url);
-      }
-    });
-  }
+  // Expand URLs
+  (tweet.entities?.urls || []).forEach(({ url, display_url }) => {
+    if (!display_url.includes('…')) {
+      fullText = fullText.replace(url, display_url);
+    }
+  });
 
-  if (tweet.referenced_tweets && includes && includes.tweets) {
-    tweet.referenced_tweets.forEach(refTweet => {
-      let referencedTweet = includes.tweets.find(t => t.id === refTweet.id);
-      if (referencedTweet) {
-        let referencedFullText = referencedTweet.note_tweet && referencedTweet.note_tweet.text
-          ? referencedTweet.note_tweet.text
-          : referencedTweet.text;
-        // Replace t.co URLs in referenced tweet text with display URLs if available
-        if (referencedTweet.entities && referencedTweet.entities.urls) {
-          referencedTweet.entities.urls.forEach(urlEntity => {
-            if (!urlEntity.display_url.includes("…")) {
-              referencedFullText = referencedFullText.replace(urlEntity.url, urlEntity.display_url);
-            }
-          });
-        }
-        if (refTweet.type === "quoted") {
-          let quotedUser = includes.users.find(u => u.id === referencedTweet.author_id);
-          let quotedUsername = quotedUser ? quotedUser.username : "unknown";
-          fullText +=  `[quoted tweet by @${quotedUsername}]${referencedFullText}[/quoted tweet]`;
-        } else if (refTweet.type === "retweeted") {
-          let retweetedUser = includes.users.find(u => u.id === referencedTweet.author_id);
-          let retweetedUsername = retweetedUser ? retweetedUser.username : "unknown";
-          fullText = `RT @${retweetedUsername} ${referencedFullText}`;
-        }
-      }
+  // Handle quoted/retweeted references
+  tweet.referenced_tweets?.forEach(ref => {
+    const refTweet = includes.tweets.find(t => t.id === ref.id);
+    if (!refTweet) return;
+    let txt = refTweet.note_tweet?.text ?? refTweet.text;
+    (refTweet.entities?.urls || []).forEach(({ url, display_url }) => {
+      if (!display_url.includes('…')) txt = txt.replace(url, display_url);
     });
-  }
-  return fullText;
+    const user   = includes.users.find(u => u.id === refTweet.author_id);
+    const handle = user?.username || 'unknown';
+    if (ref.type === 'quoted') {
+      fullText += ` [quoted @${handle}]${txt}[/quoted]`;
+    } else if (ref.type === 'retweeted') {
+      fullText = `RT @${handle} ${txt}`;
+    }
+  });
+
+  return fullText.replace(/\n/g, ' ');
 }
 
-// Function to send tweet data to the webhook and to Supabase
+// Forward a single tweet to Supabase + webhook
 async function forwardTweet(tweet, includes) {
-  const user = includes.users.find(user => user.id === tweet.author_id);
-  const username = user ? user.username : "unknown";
+  const user     = includes.users.find(u => u.id === tweet.author_id);
+  const username = user?.username ?? 'unknown';
+  const text     = getFullTweetText(tweet, includes);
 
-  let fullTweetText = getFullTweetText(tweet, includes);
-  // Ensure no line breaks
-  fullTweetText = fullTweetText.replace(/\n/g, ' ');
-
-  // Skip forwarding if text starts with "@"
-  if (fullTweetText.trim().startsWith('@')) {
-    console.log(`Tweet ${tweet.id} starts with '@'. Skipping forwarding.`);
+  if (text.trim().startsWith('@')) {
+    console.log(`[${new Date().toISOString()}] Skipping @-reply tweet ${tweet.id}`);
     return;
   }
 
+  // Choose longest non-x.com URL
   const urls = tweet.entities?.urls || [];
-  let tweetExpandedURL = "";
+  let expandedUrl = '';
   if (urls.length) {
-    const nonXUrls = urls.filter(u => {
+    const nonX = urls.filter(u => {
       try {
-        const hostname = new URL(u.expanded_url).hostname.toLowerCase();
-        return !hostname.endsWith("x.com");
-      } catch {
-        return true;
-      }
+        return !new URL(u.expanded_url).hostname.endsWith('x.com');
+      } catch { return true; }
     });
-    const candidates = nonXUrls.length ? nonXUrls : urls;
-    const longest = candidates.reduce((max, current) =>
-      current.expanded_url.length > max.expanded_url.length ? current : max,
-      candidates[0]
-    );
-    tweetExpandedURL = longest.expanded_url;
+    const choose = nonX.length ? nonX : urls;
+    expandedUrl = choose.reduce((a, b) => b.expanded_url.length > a.expanded_url.length ? b : a).expanded_url;
   }
 
   const payload = {
-    timestamp: tweet.created_at,
+    timestamp:       tweet.created_at,
     username,
-    tweetId: tweet.id,
-    conversationId: tweet.conversation_id,
-    tweetText: fullTweetText,
-    tweetExpandedURL,
+    tweetId:         tweet.id,
+    conversationId:  tweet.conversation_id,
+    tweetText:       text,
+    tweetExpandedURL: expandedUrl
   };
 
-  // Insert into Supabase (fire-and-forget)
+  // Supabase insert (fire-and-forget)
   supabase
     .from('Posts')
     .insert([{
       post_id:         tweet.id,
-      post_timestamp: tweet.created_at,
+      post_timestamp:  tweet.created_at,
       added_timestamp: new Date().toISOString(),
       x_id:            username,
       conversation_id: tweet.conversation_id,
-      text:            fullTweetText,
-      expanded_url:    tweetExpandedURL
+      text,
+      expanded_url:    expandedUrl
     }])
     .then(({ error }) => {
-      if (error) console.error(`Supabase insert error for tweet ${tweet.id}:`, error.message);
-      else console.log(`Tweet ${tweet.id} logged to Supabase.`);
-    })
-    .catch(err => {
-      console.error(`Error inserting tweet ${tweet.id} into Supabase:`, err.message);
+      if (error) console.error(`[${new Date().toISOString()}] Supabase error:`, error.message);
+      else console.log(`[${new Date().toISOString()}] Logged tweet ${tweet.id} to Supabase.`);
     });
 
-  // Send to Google Apps Script webhook (fire-and-forget)
+  // Webhook POST
   axios.post(WEBHOOK_URL, payload)
-    .then(() => {
-      console.log(`Tweet ${tweet.id} forwarded to webhook.`);
-    })
-    .catch(err => {
-      console.error(`Error forwarding tweet ${tweet.id} to webhook:`, err.response?.data || err.message);
-    });
+    .then(() => console.log(`[${new Date().toISOString()}] Forwarded tweet ${tweet.id} to webhook.`))
+    .catch(err => console.error(
+      `[${new Date().toISOString()}] Webhook error for ${tweet.id}:`,
+      err.response?.data || err.message
+    ));
 }
 
-// Called when a buffered thread has “quieted down” for WAIT_FOR_THREAD_MS
+// Flush a buffered thread
 async function flushThread(conversationId) {
-  const buffer = threadBuffers.get(conversationId);
-  if (!buffer) return;
-  clearTimeout(buffer.timeout);
+  const buf = threadBuffers.get(conversationId);
+  if (!buf) return;
+  clearTimeout(buf.timeout);
 
-  // Sort tweets by numeric ID ascending
-  buffer.tweets.sort((a, b) => (BigInt(a.tweet.id) < BigInt(b.tweet.id) ? -1 : 1));
-
-  // Merge their texts
-  const mergedText = buffer.tweets
-    .map(({ tweet, includes }) => getFullTweetText(tweet, includes).replace(/\n/g, ' '))
+  buf.tweets.sort((a, b) => BigInt(a.tweet.id) < BigInt(b.tweet.id) ? -1 : 1);
+  const merged = buf.tweets
+    .map(({ tweet, includes }) => getFullTweetText(tweet, includes))
     .join(' ');
+  const first  = buf.tweets[0];
+  const user   = first.includes.users.find(u => u.id === first.tweet.author_id);
+  const name   = user?.username ?? 'unknown';
 
-  // Use the root conversationId as tweetId
-  const first = buffer.tweets[0];
-  const user = first.includes.users.find(u => u.id === first.tweet.author_id);
-  const username = user ? user.username : 'unknown';
-
-  const payload = { timestamp: first.tweet.created_at, username, tweetId: conversationId, conversationId, tweetText: mergedText, tweetExpandedURL: '' };
+  const payload = {
+    timestamp:       first.tweet.created_at,
+    username:        name,
+    tweetId:         conversationId,
+    conversationId,
+    tweetText:       merged,
+    tweetExpandedURL: ''
+  };
 
   supabase
     .from('Posts')
     .insert([{
-      post_id:         conversationId,
-      post_timestamp:       first.tweet.created_at,
-      added_timestamp: new Date().toISOString(),
-      x_id:            username,
-      conversation_id: conversationId,
-      text:            mergedText,
-      expanded_url:    '',
-      is_possible_thread:       true,
+      post_id:             conversationId,
+      post_timestamp:      first.tweet.created_at,
+      added_timestamp:     new Date().toISOString(),
+      x_id:                name,
+      conversation_id:     conversationId,
+      text:                merged,
+      expanded_url:        '',
+      is_possible_thread:  true
     }])
     .then(({ error }) => {
-      if (error) console.error(`Supabase insert error for thread ${conversationId}:`, error.message);
-      else console.log(`Thread ${conversationId} logged to Supabase.`);
-    })
-    .catch(err => console.error(`Error inserting thread ${conversationId} into Supabase:`, err.message));
-  
+      if (error) console.error(`[${new Date().toISOString()}] Supabase thread error:`, error.message);
+      else console.log(`[${new Date().toISOString()}] Logged thread ${conversationId}.`);
+    });
+
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(`Thread ${conversationId} forwarded to webhook.`))
-    .catch(err => console.error(`Error forwarding thread ${conversationId}:`, err.message));
+    .then(() => console.log(`[${new Date().toISOString()}] Forwarded thread ${conversationId}.`))
+    .catch(err => console.error(`[${new Date().toISOString()}] Thread webhook error:`, err.message));
 
   threadBuffers.delete(conversationId);
 }
 
-// New handler that decides whether to buffer or forward immediately
+// Decide buffering vs immediate forward
 function handleTweet(tweet, includes) {
-  const conversationId = tweet.conversation_id;
-  const isRoot = conversationId === tweet.id;
-  const text = tweet.note_tweet?.text || tweet.text;
-  const threadIndicator = /(?:1\/(?:\d+|x)|🧵|\bthread\b|👇)/i.test(text);
+  const convId      = tweet.conversation_id;
+  const isRoot      = convId === tweet.id;
+  const text        = tweet.note_tweet?.text || tweet.text;
+  const isThreadOp  = /(?:1\/(?:\d+|x)|🧵|\bthread\b|👇)/i.test(text);
 
-  // If already buffering this conversation, keep buffering
-  if (threadBuffers.has(conversationId)) {
-    const buf = threadBuffers.get(conversationId);
-    buf.tweets.push({ tweet, includes });
-    clearTimeout(buf.timeout);
-    buf.timeout = setTimeout(() => flushThread(conversationId), WAIT_FOR_THREAD_MS);
+  if (threadBuffers.has(convId)) {
+    const b = threadBuffers.get(convId);
+    b.tweets.push({ tweet, includes });
+    clearTimeout(b.timeout);
+    b.timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
   }
-  // Otherwise, if this is a root tweet indicating a thread, start buffering
-  else if (isRoot && threadIndicator) {
-    threadBuffers.set(conversationId, { tweets: [{ tweet, includes }], timeout: null });
-    const buf = threadBuffers.get(conversationId);
-    buf.timeout = setTimeout(() => flushThread(conversationId), WAIT_FOR_THREAD_MS);
+  else if (isRoot && isThreadOp) {
+    const timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
+    threadBuffers.set(convId, { tweets: [{ tweet, includes }], timeout });
   }
-  // Otherwise, normal tweet → immediate forward
   else {
     forwardTweet(tweet, includes);
   }
 }
 
-// Function to initiate the stream connection with a recurring inactivity check
+// Start streaming + inactivity watchdog
 async function startStream() {
   if (streamInstance) {
-    console.log('Stream is already active.');
+    console.log(`[${new Date().toISOString()}] Stream already active.`);
     return;
   }
 
-  const inactivityInterval = setInterval(() => {
+  inactivityInterval = setInterval(() => {
     if (Date.now() - lastTweetTime >= INACTIVITY_TIMEOUT) {
-      console.log(`No data received for ${INACTIVITY_TIMEOUT / 60000} minutes. Forcing full container restart...`);
+      console.error(`[${new Date().toISOString()}] No tweets for ${INACTIVITY_TIMEOUT/60000} min – restarting.`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
-  }, 60000);
+  }, 60 * 1000);
 
   try {
     streamInstance = await twitterClient.v2.searchStream({
-      'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
-      'user.fields': 'username',
-      expansions: 'author_id,referenced_tweets.id',
+      'tweet.fields':      'created_at,conversation_id,note_tweet,referenced_tweets,entities',
+      'user.fields':       'username',
+      expansions:          'author_id,referenced_tweets.id'
     });
-
-    console.log('Connected to Twitter stream.');
+    console.log(`[${new Date().toISOString()}] Connected to Twitter stream.`);
     lastTweetTime = Date.now();
 
     for await (const { data, includes } of streamInstance) {
       lastTweetTime = Date.now();
-      const usernameForLog = (includes?.users?.[0]?.username) || "unknown";
-      console.log(`New tweet detected: ${data.id} from @${usernameForLog}`);
+      const userLog = includes?.users?.[0]?.username ?? 'unknown';
+      console.log(`[${new Date().toISOString()}] New tweet ${data.id} from @${userLog}`);
       handleTweet(data, includes);
     }
   } finally {
     clearInterval(inactivityInterval);
-    if (streamInstance && typeof streamInstance.destroy === 'function') {
-      try {
-        streamInstance.destroy();
-      } catch (err) {
-        console.error("Error destroying stream:", err);
-      }
+    if (streamInstance?.destroy) {
+      try { streamInstance.destroy(); }
+      catch (err) { console.error(`[${new Date().toISOString()}] Error destroying stream:`, err); }
     }
     streamInstance = null;
   }
 }
 
-// Function to manage reconnections
+// Manage reconnections with backoff
 async function runStream() {
-  let reconnectDelay = 30000;
-  const maxDelay = 300000; // 5 minutes
+  let reconnectDelay = 30 * 1000;
+  const maxDelay    = 5 * 60 * 1000;
 
   while (!isShuttingDown) {
     try {
       await startStream();
-      reconnectDelay = 30000; // reset after a successful stream
-    } catch (error) {
+      reconnectDelay = 30 * 1000;
+    }
+    catch (error) {
+      const now = new Date().toISOString();
       const status = error.response?.status;
-      const headers = error.response?.headers || {};
-      const data = error.response?.data || {};
+      console.error(`[${now}] Stream error (${status || error.code || error.name}): ${error.message}`);
 
-      // 1) Too many connections
-      if (data.connection_issue === 'TooManyConnections') {
-        console.error('Exceeded connection limit. Waiting 1 minute before retry.');
-        await new Promise(r => setTimeout(r, 60000));
-        continue;
-      }
-
-      // 2) Rate-limited by endpoint
       if (status === 429) {
-        const reset = Number(headers['x-rate-limit-reset']) * 1000;
-        const now   = Date.now();
-        const wait  = reset > now ? reset - now + 1000 : reconnectDelay;
-
-        console.error(`Rate limit hit. Next reset at ${new Date(reset).toISOString()}. Waiting ${Math.ceil(wait/1000)}s.`);
-        await new Promise(r => setTimeout(r, wait));
-        reconnectDelay = Math.min(maxDelay, reconnectDelay * 2);
+        const hdrs = error.response.headers || {};
+        const rem  = hdrs['x-rate-limit-remaining'];
+        const rst  = parseInt(hdrs['x-rate-limit-reset'], 10);
+        console.error(`[${now}] Rate limit info – remaining=${rem}, reset=${rst}`);
+        let waitSec = 60;
+        if (!isNaN(rst)) {
+          const nowSec = Math.floor(Date.now()/1000);
+          waitSec = Math.max(rst - nowSec, 60);
+        }
+        console.log(`[${now}] Waiting ${waitSec} s for rate-limit reset before reconnecting.`);
+        await new Promise(r => setTimeout(r, waitSec * 1000));
         continue;
       }
 
-      // 3) All other errors → exponential back-off
-      console.error(`Stream failed (${error.code||error.name||status}). Reconnecting in ${reconnectDelay/1000}s...`);
+      // Too many connections? just log
+      if (error.code === 'TooManyConnections') {
+        console.error(`[${now}] Too many streaming connections; backing off.`);
+      }
+
+      console.log(`[${now}] Reconnecting in ${reconnectDelay/1000} s...`);
       await new Promise(r => setTimeout(r, reconnectDelay));
-      reconnectDelay = Math.min(maxDelay, reconnectDelay * 2);
+      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
   }
 }
 
-// Graceful shutdown: close the stream and exit.
+// Graceful shutdown
 function shutdown() {
   isShuttingDown = true;
-  console.log('Shutdown initiated. Closing Twitter stream...');
-  if (streamInstance && typeof streamInstance.destroy === 'function') {
-    streamInstance.destroy();
-  }
-  if (inactivityInterval) clearInterval(inactivityInterval);
+  console.log(`[${new Date().toISOString()}] Shutdown initiated.`);
+  streamInstance?.destroy();
+  clearInterval(inactivityInterval);
   process.exit(0);
 }
 
 process.on('SIGTERM', shutdown);
-process.on('SIGINT', shutdown);
+process.on('SIGINT',  shutdown);
 
 runStream();
