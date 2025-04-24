@@ -264,6 +264,7 @@ async function runStream() {
       const status = startError.response?.status;
       console.error(`[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`);
 
+      // Handle 429 Rate Limit
       if (status === 429) {
         const headers = startError.response?.headers || {};
         const reset = parseInt(headers['x-rate-limit-reset'], 10);
@@ -272,7 +273,7 @@ async function runStream() {
         const backoffUntil = Date.now() + 15 * 60 * 1000;
 
         console.warn(`[${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()}`);
-        
+    
         if (!softRateLimit) {
           softRateLimit = true;
           softRateLimitUntil = backoffUntil;
@@ -292,6 +293,25 @@ async function runStream() {
         continue;
       }
 
+      // Handle 409 Conflict: Stream already connected
+      if (status === 409) {
+        const delay = Math.min(reconnectDelay * 2, 30 * 60 * 1000); // Max 30 mins
+        console.warn(`[${now}] Twitter 409 Conflict. Another stream is already active. Waiting ${delay / 1000}s before retrying...`);
+        await new Promise(r => setTimeout(r, delay));
+        reconnectDelay = delay;
+        continue;
+      }
+
+      // Handle 503 Service Unavailable
+      if (status === 503) {
+        const base = 5 * 60 * 1000; // 5 minutes
+        const jitter = Math.floor(Math.random() * 2 * 60 * 1000); // + up to 2 mins
+        const delay = base + jitter;
+        console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
       if (startError.code === 'TooManyConnections') {
         console.warn(`[${now}] Too many connections. Backing off.`);
       }
@@ -300,12 +320,11 @@ async function runStream() {
       await new Promise(r => setTimeout(r, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
-  }
-
-  if (attempts >= maxAttempts) {
-    console.error(`[${new Date().toISOString()}] Max attempts reached. Restarting.`);
-    forceFullRestart();
-  }
+    
+    if (attempts >= maxAttempts) {
+      console.error(`[${new Date().toISOString()}] Max attempts reached. Restarting.`);
+      forceFullRestart();
+    }
 }
 
 // Graceful shutdown
