@@ -3,6 +3,7 @@ const { createClient } = require('@supabase/supabase-js');
 const axios = require('axios');
 const http = require('http');
 let softRateLimitUntil = null;
+let streamStarting = false;
 
 // Load env vars
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
@@ -57,6 +58,20 @@ setInterval(() => {
   const mem = (process.memoryUsage().rss / 1024 / 1024).toFixed(2);
   console.log(`[${new Date().toISOString()}] Memory: ${mem} MB | Buffers: ${threadBuffers.size}`);
 }, 300000);
+
+// Thread buffer expiration
+setInterval(() => {
+  const now = Date.now();
+  for (const [convId, buf] of threadBuffers) {
+    const firstTweetTime = buf?.tweets?.[0]?.tweet?.created_at;
+    if (!firstTweetTime) continue;
+    const ageMs = now - new Date(firstTweetTime).getTime();
+    if (ageMs > 4 * 60 * 60 * 1000) { // 4 hours
+      console.warn(`[${new Date().toISOString()}] Expiring old thread buffer: ${convId}`);
+      threadBuffers.delete(convId);
+    }
+  }
+}, 3600000); // Every 1 hour
 
 function forceFullRestart() {
   console.log(`[${new Date().toISOString()}] Forcing container restart`);
@@ -232,6 +247,19 @@ async function startStream() {
   }
 }
 
+async function startStreamSafe() {
+  if (streamStarting) {
+    console.warn(`[${new Date().toISOString()}] Stream start already in progress, skipping.`);
+    return;
+  }
+  streamStarting = true;
+  try {
+    await startStream();
+  } finally {
+    streamStarting = false;
+  }
+}
+
 async function runStream() {
   let reconnectDelay = 30000;
   const maxDelay = 300000;
@@ -252,7 +280,7 @@ async function runStream() {
 
     let startError = null;
     try {
-      await startStream();
+      await startStreamSafe();
       reconnectDelay = 30000;
       attempts = 0;
     } catch (err) {
@@ -264,8 +292,8 @@ async function runStream() {
       const status = startError.response?.status;
       console.error(`[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`);
 
-      // Handle 429 Rate Limit
       if (status === 429) {
+        // Handle 429 Rate Limit
         const headers = startError.response?.headers || {};
         const reset = parseInt(headers['x-rate-limit-reset'], 10);
         const nowSec = Math.floor(Date.now() / 1000);
@@ -273,27 +301,20 @@ async function runStream() {
         const backoffUntil = Date.now() + 15 * 60 * 1000;
 
         console.warn(`[${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()}`);
-    
         if (!softRateLimit) {
           softRateLimit = true;
           softRateLimitUntil = backoffUntil;
-
           console.warn(`[${now}] Activating soft rate limit until ${new Date(backoffUntil).toISOString()}`);
-
           setTimeout(() => {
             softRateLimit = false;
             softRateLimitUntil = null;
             console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
           }, 15 * 60 * 1000);
-        } else {
-          console.warn(`[${now}] 429 received during soft limit. Already backing off until ${new Date(softRateLimitUntil).toISOString()}`);
         }
-
         await new Promise(r => setTimeout(r, wait * 1000));
         continue;
       }
 
-      // Handle 409 Conflict: Stream already connected
       if (status === 409) {
         const delay = Math.min(reconnectDelay * 2, 30 * 60 * 1000); // Max 30 mins
         console.warn(`[${now}] Twitter 409 Conflict. Another stream is already active. Waiting ${delay / 1000}s before retrying...`);
@@ -302,7 +323,6 @@ async function runStream() {
         continue;
       }
 
-      // Handle 503 Service Unavailable
       if (status === 503) {
         const base = 5 * 60 * 1000; // 5 minutes
         const jitter = Math.floor(Math.random() * 2 * 60 * 1000); // + up to 2 mins
@@ -315,6 +335,8 @@ async function runStream() {
       if (startError.code === 'TooManyConnections') {
         console.warn(`[${now}] Too many connections. Backing off.`);
       }
+
+      console.warn(`[${now}] Unknown stream error. Applying backoff.`); // << added clarity
 
       console.log(`[${now}] Retry in ${reconnectDelay / 1000}s`);
       await new Promise(r => setTimeout(r, reconnectDelay));
