@@ -103,7 +103,7 @@ function getFullTweetText(tweet, includes) {
   if (tweet.article) {
     const title = tweet.article.title || '';
     const preview = tweet.article.preview_text || '';
-    text += ` ${title} ${preview}`;
+    text += ` ${title} ${preview}…`;
   }
 
   return text.replace(/\n/g, ' ');
