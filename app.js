@@ -99,6 +99,13 @@ function getFullTweetText(tweet, includes) {
     if (ref.type === 'retweeted') text = `RT @${handle} ${refText}`;
   });
 
+  // NEW: Append article title and preview_text if present
+  if (tweet.article) {
+    const title = tweet.article.title || '';
+    const preview = tweet.article.preview_text || '';
+    text += ` ${title} ${preview}`;
+  }
+
   return text.replace(/\n/g, ' ');
 }
 
@@ -231,7 +238,7 @@ async function startStream() {
   }, 60000);
 
   streamInstance = await twitterClient.v2.searchStream({
-    'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities',
+    'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,article',
     'user.fields': 'username',
     expansions: 'author_id,referenced_tweets.id'
   });
