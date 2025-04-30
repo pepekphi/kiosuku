@@ -292,6 +292,7 @@ async function runStream() {
       await startStreamSafe();
       reconnectDelay = 30000;
       attempts = 0;
+      break;  // ← stop the retry loop on success
     } catch (err) {
       startError = err;
     }
