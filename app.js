@@ -245,6 +245,10 @@ async function startStream() {
     expansions: 'author_id,referenced_tweets.id'
   });
 
+  if (!streamInstance || !streamInstance[Symbol.asyncIterator]) {
+    throw new Error('Invalid stream instance - not async iterable.');
+  }
+
   console.log(`[${new Date().toISOString()}] Connected to Twitter stream`);
   lastTweetTime = Date.now();
 
@@ -263,6 +267,12 @@ async function startStreamSafe() {
   }
   streamStarting = true;
   try {
+    if (streamInstance) {
+      console.warn(`[${new Date().toISOString()}] Stream already assigned. Verifying...`);
+      // Here you can insert a test if needed, or just allow it to reconnect.
+      return;
+    }
+
     await startStream();
   } finally {
     streamStarting = false;
@@ -301,6 +311,10 @@ async function runStream() {
       const now = new Date().toISOString();
       const status = startError.response?.status;
       console.error(`[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`);
+
+      // 🔧 Add this here:
+      streamInstance?.destroy?.();
+      streamInstance = null;
 
       if (status === 429) {
         // Handle 429 Rate Limit
