@@ -258,6 +258,11 @@ async function startStream() {
     console.log(`[${new Date().toISOString()}] Tweet ${data.id} from @${userLog}`);
     handleTweet(data, includes);
   }
+
+  // ⬇️ ADD THIS: cleanup when stream ends
+  console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
+  streamInstance?.destroy?.();
+  streamInstance = null;
 }
 
 async function startStreamSafe() {
