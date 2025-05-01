@@ -265,6 +265,7 @@ async function startStream() {
     }
   } finally {
     console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
+    clearInterval(inactivityInterval);
     streamInstance?.destroy?.();
     streamInstance = null;
   }
@@ -277,12 +278,6 @@ async function startStreamSafe() {
   }
   streamStarting = true;
   try {
-    if (streamInstance) {
-      console.warn(`[${new Date().toISOString()}] Stream already assigned. Verifying...`);
-      // Here you can insert a test if needed, or just allow it to reconnect.
-      return;
-    }
-
     await startStream();
   } finally {
     streamStarting = false;
