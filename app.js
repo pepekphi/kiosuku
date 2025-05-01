@@ -252,17 +252,22 @@ async function startStream() {
   console.log(`[${new Date().toISOString()}] Connected to Twitter stream`);
   lastTweetTime = Date.now();
 
-  for await (const { data, includes } of streamInstance) {
-    lastTweetTime = Date.now();
-    const userLog = includes?.users?.[0]?.username ?? 'unknown';
-    console.log(`[${new Date().toISOString()}] Tweet ${data.id} from @${userLog}`);
-    handleTweet(data, includes);
+  try {
+    for await (const { data, includes } of streamInstance) {
+      lastTweetTime = Date.now();
+      const userLog = includes?.users?.[0]?.username ?? 'unknown';
+      console.log(`[${new Date().toISOString()}] Tweet ${data.id} from @${userLog}`);
+      try {
+        handleTweet(data, includes);
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Error inside stream loop:`, err);
+      }
+    }
+  } finally {
+    console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
+    streamInstance?.destroy?.();
+    streamInstance = null;
   }
-
-  // ⬇️ ADD THIS: cleanup when stream ends
-  console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
-  streamInstance?.destroy?.();
-  streamInstance = null;
 }
 
 async function startStreamSafe() {
