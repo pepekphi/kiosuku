@@ -187,7 +187,7 @@ async function flushThread(conversationId) {
     expandedUrl = pick.reduce((a, b) => b.expanded_url.length > a.expanded_url.length ? b : a).expanded_url;
   }
 
-  const possibleThread = buf.tweets.length > 1;
+  const isThread = buf.tweets.length > 1;
 
   const payload = {
     timestamp: first.tweet.created_at,
@@ -206,7 +206,7 @@ async function flushThread(conversationId) {
     conversation_id: conversationId,
     post_text: merged,
     expanded_url: expandedUrl,
-    possible_thread: possibleThread
+    is_thread: isThread
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
     else console.log(`[${new Date().toISOString()}] Thread logged: ${conversationId}`);
