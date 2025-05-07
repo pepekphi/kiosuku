@@ -1,16 +1,19 @@
-const { TwitterApi } = require('twitter-api-v2');
-const { createClient } = require('@supabase/supabase-js');
+// Settings
+const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
+const WAIT_FOR_THREAD_MS = 7600;
+const MAX_TWEETS_PER_THREAD = 20;
+
+// Dependencies
 const axios = require('axios');
 const http = require('http');
-let softRateLimitUntil = null;
-let streamStarting = false;
+const { TwitterApi } = require('twitter-api-v2');
+const { createClient } = require('@supabase/supabase-js');
 
-// Load env vars
+// Environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-
 if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
   console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
   process.exit(1);
@@ -20,15 +23,13 @@ if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
 const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Globals
+// Global variables
 let streamInstance;
 let isShuttingDown = false;
 let inactivityInterval;
 let softRateLimit = false;
-
-const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
-const WAIT_FOR_THREAD_MS = 7600;
-const MAX_TWEETS_PER_THREAD = 20;
+let softRateLimitUntil = null;
+let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
 
@@ -316,13 +317,10 @@ async function runStream() {
       const now = new Date().toISOString();
       const status = startError.response?.status;
       console.error(`[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`);
-
-      // 🔧 Add this here:
       streamInstance?.destroy?.();
       streamInstance = null;
 
       if (status === 429) {
-        // Handle 429 Rate Limit
         const headers = startError.response?.headers || {};
         const reset = parseInt(headers['x-rate-limit-reset'], 10);
         const nowSec = Math.floor(Date.now() / 1000);
@@ -353,8 +351,8 @@ async function runStream() {
       }
 
       if (status === 503) {
-        const base = 5 * 60 * 1000; // 5 minutes
-        const jitter = Math.floor(Math.random() * 2 * 60 * 1000); // + up to 2 mins
+        const base = 5 * 60 * 1000;
+        const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
         const delay = base + jitter;
         console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
         await new Promise(r => setTimeout(r, delay));
@@ -365,7 +363,7 @@ async function runStream() {
         console.warn(`[${now}] Too many connections. Backing off.`);
       }
 
-      console.warn(`[${now}] Unknown stream error. Applying backoff.`); // << added clarity
+      console.warn(`[${now}] Unknown stream error. Applying backoff.`);
 
       console.log(`[${now}] Retry in ${reconnectDelay / 1000}s`);
       await new Promise(r => setTimeout(r, reconnectDelay));
