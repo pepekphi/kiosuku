@@ -175,13 +175,25 @@ async function flushThread(conversationId) {
   const user = first.includes.users.find(u => u.id === first.tweet.author_id);
   const name = user?.username ?? 'unknown';
 
+  // Extract expanded URL from first tweet
+  const urls = first.tweet.entities?.urls || [];
+  let expandedUrl = '';
+  if (urls.length) {
+    const nonX = urls.filter(u => {
+      try { return !new URL(u.expanded_url).hostname.endsWith('x.com'); }
+      catch { return true; }
+    });
+    const pick = nonX.length ? nonX : urls;
+    expandedUrl = pick.reduce((a, b) => b.expanded_url.length > a.expanded_url.length ? b : a).expanded_url;
+  }
+
   const payload = {
     timestamp: first.tweet.created_at,
     username: name,
     tweetId: conversationId,
     conversationId,
     tweetText: merged,
-    tweetExpandedURL: ''
+    tweetExpandedURL: expandedUrl
   };
 
   supabase.from('Posts').insert([{
@@ -191,7 +203,7 @@ async function flushThread(conversationId) {
     x_id: name,
     conversation_id: conversationId,
     post_text: merged,
-    expanded_url: '',
+    expanded_url: expandedUrl,
     possible_thread: true
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
