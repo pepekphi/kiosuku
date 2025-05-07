@@ -192,7 +192,7 @@ async function flushThread(conversationId) {
     conversation_id: conversationId,
     text: merged,
     expanded_url: '',
-    is_possible_thread: true
+    possible_thread: true
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
     else console.log(`[${new Date().toISOString()}] Thread logged: ${conversationId}`);
