@@ -152,7 +152,7 @@ async function forwardTweet(tweet, includes) {
     added_timestamp: new Date().toISOString(),
     x_id: username,
     conversation_id: tweet.conversation_id,
-    text,
+    post_text: text,
     expanded_url: expandedUrl
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
@@ -190,7 +190,7 @@ async function flushThread(conversationId) {
     added_timestamp: new Date().toISOString(),
     x_id: name,
     conversation_id: conversationId,
-    text: merged,
+    post_text: merged,
     expanded_url: '',
     possible_thread: true
   }]).then(({ error }) => {
