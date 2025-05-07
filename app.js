@@ -15,7 +15,7 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
-  console.error([${new Date().toISOString()}] Missing required environment variables.);
+  console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
   process.exit(1);
 }
 
@@ -33,7 +33,7 @@ let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
 
-console.log([${new Date().toISOString()}] Service starting, PID: ${process.pid});
+console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
 // Health check server
 http.createServer((req, res) => {
@@ -51,13 +51,13 @@ http.createServer((req, res) => {
     res.end('x-filtered-stream OK\n'); // This line keeps Railway happy
   }
 }).listen(8080, () => {
-  console.log([${new Date().toISOString()}] Health check server running on port 8080);
+  console.log(`[${new Date().toISOString()}] Health check server running on port 8080`);
 });
 
 // Memory logging
 setInterval(() => {
   const mem = (process.memoryUsage().rss / 1024 / 1024).toFixed(2);
-  console.log([${new Date().toISOString()}] Memory: ${mem} MB | Buffers: ${threadBuffers.size});
+  console.log(`[${new Date().toISOString()}] Memory: ${mem} MB | Buffers: ${threadBuffers.size}`);
 }, 300000);
 
 // Thread buffer expiration
@@ -68,14 +68,14 @@ setInterval(() => {
     if (!firstTweetTime) continue;
     const ageMs = now - new Date(firstTweetTime).getTime();
     if (ageMs > 4 * 60 * 60 * 1000) { // 4 hours
-      console.warn([${new Date().toISOString()}] Expiring old thread buffer: ${convId});
+      console.warn(`[${new Date().toISOString()}] Expiring old thread buffer: ${convId}`);
       threadBuffers.delete(convId);
     }
   }
 }, 3600000); // Every 1 hour
 
 function forceFullRestart() {
-  console.log([${new Date().toISOString()}] Forcing container restart);
+  console.log(`[${new Date().toISOString()}] Forcing container restart`);
   process.exit(1);
 }
 
@@ -96,8 +96,8 @@ function getFullTweetText(tweet, includes) {
     });
     const user = includes.users.find(u => u.id === refTweet.author_id);
     const handle = user?.username || 'unknown';
-    if (ref.type === 'quoted') text +=  [quoted @${handle}]${refText}[/quoted];
-    if (ref.type === 'retweeted') text = RT @${handle} ${refText};
+    if (ref.type === 'quoted') text += ` [quoted @${handle}]${refText}[/quoted]`;
+    if (ref.type === 'retweeted') text = `RT @${handle} ${refText}`;
   });
 
   // NEW: Append article title and preview_text if present
@@ -105,7 +105,7 @@ function getFullTweetText(tweet, includes) {
     const title = tweet.article.title || '';
     const preview = tweet.article.preview_text || '';
     if (title || preview) {
-      text +=  ${title} ${preview}…;
+      text += ` ${title} ${preview}…`;
     }
   }
 
@@ -114,7 +114,7 @@ function getFullTweetText(tweet, includes) {
 
 async function forwardTweet(tweet, includes) {
   if (!tweet || !includes || !includes.users) {
-    console.warn([${new Date().toISOString()}] Skipping malformed tweet);
+    console.warn(`[${new Date().toISOString()}] Skipping malformed tweet`);
     return;
   }
 
@@ -122,7 +122,7 @@ async function forwardTweet(tweet, includes) {
   const username = user?.username ?? 'unknown';
   const text = getFullTweetText(tweet, includes);
   if (text.trim().startsWith('@')) {
-    console.log([${new Date().toISOString()}] Skipping @ tweet ${tweet.id});
+    console.log(`[${new Date().toISOString()}] Skipping @ tweet ${tweet.id}`);
     return;
   }
 
@@ -155,13 +155,13 @@ async function forwardTweet(tweet, includes) {
     post_text: text,
     expanded_url: expandedUrl
   }]).then(({ error }) => {
-    if (error) console.error([${new Date().toISOString()}] Supabase error: ${error.message});
-    else console.log([${new Date().toISOString()}] Supabase OK for tweet ${tweet.id});
+    if (error) console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
+    else console.log(`[${new Date().toISOString()}] Supabase OK for tweet ${tweet.id}`);
   });
 
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log([${new Date().toISOString()}] Webhook OK for tweet ${tweet.id}))
-    .catch(err => console.error([${new Date().toISOString()}] Webhook error:, err.response?.data || err.message));
+    .then(() => console.log(`[${new Date().toISOString()}] Webhook OK for tweet ${tweet.id}`))
+    .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
 }
 
 async function flushThread(conversationId) {
@@ -176,7 +176,6 @@ async function flushThread(conversationId) {
   const name = user?.username ?? 'unknown';
 
   // Extract expanded URL from first tweet
-  const possibleThread = buf.tweets.length > 1;
   const urls = first.tweet.entities?.urls || [];
   let expandedUrl = '';
   if (urls.length) {
@@ -187,6 +186,8 @@ async function flushThread(conversationId) {
     const pick = nonX.length ? nonX : urls;
     expandedUrl = pick.reduce((a, b) => b.expanded_url.length > a.expanded_url.length ? b : a).expanded_url;
   }
+
+  const possibleThread = buf.tweets.length > 1;
 
   const payload = {
     timestamp: first.tweet.created_at,
@@ -207,13 +208,13 @@ async function flushThread(conversationId) {
     expanded_url: expandedUrl,
     possible_thread: possibleThread
   }]).then(({ error }) => {
-    if (error) console.error([${new Date().toISOString()}] Supabase thread error: ${error.message});
-    else console.log([${new Date().toISOString()}] Thread logged: ${conversationId});
+    if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
+    else console.log(`[${new Date().toISOString()}] Thread logged: ${conversationId}`);
   });
 
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log([${new Date().toISOString()}] Thread webhook OK for ${conversationId}))
-    .catch(err => console.error([${new Date().toISOString()}] Thread webhook error:, err.message));
+    .then(() => console.log(`[${new Date().toISOString()}] Thread webhook OK for ${conversationId}`))
+    .catch(err => console.error(`[${new Date().toISOString()}] Thread webhook error:`, err.message));
 
   threadBuffers.delete(conversationId);
 }
@@ -228,7 +229,7 @@ function handleTweet(tweet, includes) {
     const buf = threadBuffers.get(convId);
     buf.tweets.push({ tweet, includes });
     if (buf.tweets.length >= MAX_TWEETS_PER_THREAD) {
-      console.warn([${new Date().toISOString()}] Thread ${convId} exceeded max. Flushing.);
+      console.warn(`[${new Date().toISOString()}] Thread ${convId} exceeded max. Flushing.`);
       flushThread(convId);
       return;
     }
@@ -247,7 +248,7 @@ async function startStream() {
 
   inactivityInterval = setInterval(() => {
     if (Date.now() - lastTweetTime > INACTIVITY_TIMEOUT) {
-      console.warn([${new Date().toISOString()}] No tweets in 90 minutes. Restarting.);
+      console.warn(`[${new Date().toISOString()}] No tweets in 90 minutes. Restarting.`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
@@ -263,22 +264,22 @@ async function startStream() {
     throw new Error('Invalid stream instance - not async iterable.');
   }
 
-  console.log([${new Date().toISOString()}] Connected to Twitter stream);
+  console.log(`[${new Date().toISOString()}] Connected to Twitter stream`);
   lastTweetTime = Date.now();
 
   try {
     for await (const { data, includes } of streamInstance) {
       lastTweetTime = Date.now();
       const userLog = includes?.users?.[0]?.username ?? 'unknown';
-      console.log([${new Date().toISOString()}] Tweet ${data.id} from @${userLog});
+      console.log(`[${new Date().toISOString()}] Tweet ${data.id} from @${userLog}`);
       try {
         handleTweet(data, includes);
       } catch (err) {
-        console.error([${new Date().toISOString()}] Error inside stream loop:, err);
+        console.error(`[${new Date().toISOString()}] Error inside stream loop:`, err);
       }
     }
   } finally {
-    console.warn([${new Date().toISOString()}] Stream ended. Cleaning up.);
+    console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
     clearInterval(inactivityInterval);
     streamInstance?.destroy?.();
     streamInstance = null;
@@ -287,7 +288,7 @@ async function startStream() {
 
 async function startStreamSafe() {
   if (streamStarting) {
-    console.warn([${new Date().toISOString()}] Stream start already in progress, skipping.);
+    console.warn(`[${new Date().toISOString()}] Stream start already in progress, skipping.`);
     return;
   }
   streamStarting = true;
@@ -308,13 +309,13 @@ async function runStream() {
     // 💡 Soft rate limit mode - throttle retries for 15 min
     if (softRateLimit) {
       const remaining = softRateLimitUntil ? ((softRateLimitUntil - Date.now()) / 1000).toFixed(0) : 'unknown';
-      console.warn([${new Date().toISOString()}] Soft rate limit active. Sleeping 60s. (${remaining}s left));
+      console.warn(`[${new Date().toISOString()}] Soft rate limit active. Sleeping 60s. (${remaining}s left)`);
       await new Promise(r => setTimeout(r, 60000));
       continue;
     }
 
     attempts++;
-    console.log([${new Date().toISOString()}] Stream attempt #${attempts});
+    console.log(`[${new Date().toISOString()}] Stream attempt #${attempts}`);
 
     let startError = null;
     try {
@@ -329,7 +330,7 @@ async function runStream() {
     if (startError) {
       const now = new Date().toISOString();
       const status = startError.response?.status;
-      console.error([${now}] Stream error (${status || startError.code || startError.name}): ${startError.message});
+      console.error(`[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`);
       streamInstance?.destroy?.();
       streamInstance = null;
 
@@ -340,15 +341,15 @@ async function runStream() {
         const wait = Math.max((reset || nowSec + 60) - nowSec, 60);
         const backoffUntil = Date.now() + 15 * 60 * 1000;
 
-        console.warn([${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()});
+        console.warn(`[${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()}`);
         if (!softRateLimit) {
           softRateLimit = true;
           softRateLimitUntil = backoffUntil;
-          console.warn([${now}] Activating soft rate limit until ${new Date(backoffUntil).toISOString()});
+          console.warn(`[${now}] Activating soft rate limit until ${new Date(backoffUntil).toISOString()}`);
           setTimeout(() => {
             softRateLimit = false;
             softRateLimitUntil = null;
-            console.log([${new Date().toISOString()}] Soft rate limit cleared.);
+            console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
           }, 15 * 60 * 1000);
         }
         await new Promise(r => setTimeout(r, wait * 1000));
@@ -357,7 +358,7 @@ async function runStream() {
 
       if (status === 409) {
         const delay = Math.min(reconnectDelay * 2, 30 * 60 * 1000); // Max 30 mins
-        console.warn([${now}] Twitter 409 Conflict. Another stream is already active. Waiting ${delay / 1000}s before retrying...);
+        console.warn(`[${now}] Twitter 409 Conflict. Another stream is already active. Waiting ${delay / 1000}s before retrying...`);
         await new Promise(r => setTimeout(r, delay));
         reconnectDelay = delay;
         continue;
@@ -367,24 +368,24 @@ async function runStream() {
         const base = 5 * 60 * 1000;
         const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
         const delay = base + jitter;
-        console.warn([${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.);
+        console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
         await new Promise(r => setTimeout(r, delay));
         continue;
       }
 
       if (startError.code === 'TooManyConnections') {
-        console.warn([${now}] Too many connections. Backing off.);
+        console.warn(`[${now}] Too many connections. Backing off.`);
       }
 
-      console.warn([${now}] Unknown stream error. Applying backoff.);
+      console.warn(`[${now}] Unknown stream error. Applying backoff.`);
 
-      console.log([${now}] Retry in ${reconnectDelay / 1000}s);
+      console.log(`[${now}] Retry in ${reconnectDelay / 1000}s`);
       await new Promise(r => setTimeout(r, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
     
     if (attempts >= maxAttempts) {
-      console.error([${new Date().toISOString()}] Max attempts reached. Restarting.);
+      console.error(`[${new Date().toISOString()}] Max attempts reached. Restarting.`);
       forceFullRestart();
     }
   }
@@ -393,41 +394,41 @@ async function runStream() {
 // Graceful shutdown
 function shutdown() {
   isShuttingDown = true;
-  console.log([${new Date().toISOString()}] Shutdown signal received);
+  console.log(`[${new Date().toISOString()}] Shutdown signal received`);
   streamInstance?.destroy();
   clearInterval(inactivityInterval);
   process.exit(0);
 }
 
 process.on('SIGTERM', () => {
-  console.warn([${new Date().toISOString()}] ⚠️ Received SIGTERM from Railway);
+  console.warn(`[${new Date().toISOString()}] ⚠️ Received SIGTERM from Railway`);
   shutdown();
 });
 process.on('SIGINT', shutdown);
 process.on('uncaughtException', err => {
-  console.error([${new Date().toISOString()}] Uncaught Exception:, err);
+  console.error(`[${new Date().toISOString()}] Uncaught Exception:`, err);
 });
 process.on('unhandledRejection', reason => {
-  console.error([${new Date().toISOString()}] Unhandled Rejection:, reason);
+  console.error(`[${new Date().toISOString()}] Unhandled Rejection:`, reason);
 });
 
 // 💓 Keep-alive heartbeat
 setInterval(() => {
-  console.log([${new Date().toISOString()}] Heartbeat: alive | Last tweet seen at ${new Date(lastTweetTime).toISOString()});
+  console.log(`[${new Date().toISOString()}] Heartbeat: alive | Last tweet seen at ${new Date(lastTweetTime).toISOString()}`);
 }, 60 * 60 * 1000); // 1 hour
 
 // 🆕 Boot delay + run loop
 (async () => {
-  console.log([${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...);
+  console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
   await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
 
   while (true) {
     try {
       await runStream();
     } catch (err) {
-      console.error([${new Date().toISOString()}] runStream error:, err);
+      console.error(`[${new Date().toISOString()}] runStream error:`, err);
     }
-    console.log([${new Date().toISOString()}] Restarting runStream in 10s...);
+    console.log(`[${new Date().toISOString()}] Restarting runStream in 10s...`);
     await new Promise(r => setTimeout(r, 10000));
   }
 })();
