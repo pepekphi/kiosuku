@@ -47,7 +47,7 @@ http.createServer((req, res) => {
       buffers: threadBuffers.size,
       lastTweet: new Date(lastTweetTime).toISOString(),
     }));
-  } else if (req.url === '/maintenance') { // For me to manually trigger maintenance with server URL
+  } else if (req.url === '/maintenance') { // For me or the cron job to manually trigger maintenance with server URL
     runMaintenance(supabase)
       .then(() => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
