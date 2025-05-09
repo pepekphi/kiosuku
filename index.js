@@ -1,7 +1,7 @@
 // Settings
 const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
 const WAIT_FOR_THREAD_MS = 7600;
-const MAX_TWEETS_PER_THREAD = 20;
+const MAX_TWEETS_PER_THREAD = 30;
 
 // Dependencies
 const axios = require('axios');
@@ -286,7 +286,7 @@ async function startStream() {
       try {
         handleTweet(data, includes);
       } catch (err) {
-        console.error(`[${new Date().toISOString()}] Error inside stream loop:`, err);
+        console.error(`[${new Date().toISOString()}] Error inside stream loop:`, err, err.stack);
       }
     }
   } finally {
@@ -341,7 +341,11 @@ async function runStream() {
     if (startError) {
       const now = new Date().toISOString();
       const status = startError.response?.status;
-      console.error(`[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`);
+      console.error(
+        `[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`,
+        startError,
+        startError.stack
+      );
       streamInstance?.destroy?.();
       streamInstance = null;
 
@@ -442,7 +446,7 @@ setInterval(() => {
     } catch (err) {
       console.error(`[${new Date().toISOString()}] Daily maintenance error:`, err);
     }
-  }, 0.5 * 60 * 60 * 1000); // Change 0.5 back to 24
+  }, 24 * 60 * 60 * 1000);
   
   while (true) {
     try {
