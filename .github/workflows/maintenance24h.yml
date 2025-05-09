@@ -4,6 +4,7 @@ name: maintenance24h
 on:
   schedule:
     - cron: '0 0 * * *'    # Runs every day at 00:00 UTC
+    - cron: '20 6 * * *'    # Runs every day at 06:20 UTC
   workflow_dispatch:       # Optional: Allow manual trigger from GitHub Actions UI
 
 jobs:
