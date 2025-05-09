@@ -1,0 +1,15 @@
+name: Daily maintenance
+
+on:
+  schedule:
+    - cron: '0 0 * * *'    # Runs every day at 00:00 UTC
+
+jobs:
+  trigger-maintenance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit maintenance endpoint
+        run: |
+          curl --fail "$maintenance_url"
+        env:
+          maintenance_url: ${{ secrets.maintenance_url }}
