@@ -1,0 +1,19 @@
+# Make sure to add MAINTENANCE3H_URL secret in Github repository at 'Settings' / 'Secrets and variables' / 'Actions' / 'Repository secrets'
+name: maintenance3h
+
+on:
+  schedule:
+    - cron: '0 */3 * * *'    # Runs every 3 hours at minute 0 (e.g., 00:00, 03:00, 06:00, etc.)
+  workflow_dispatch:       # Optional: Allow manual trigger from GitHub Actions UI
+
+jobs:
+  trigger-maintenance3h:
+    if: github.ref == 'refs/heads/production'   # Only run on production branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Hit maintenance3h endpoint
+        run: |
+          curl --fail "$MAINTENANCE3H_URL"
+        env:
+          MAINTENANCE3H_URL: ${{ secrets.MAINTENANCE3H_URL }}
