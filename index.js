@@ -8,6 +8,7 @@ const axios = require('axios');
 const http = require('http');
 const { TwitterApi } = require('twitter-api-v2');
 const { createClient } = require('@supabase/supabase-js');
+const { runMaintenance } = require('./maintenance'); // Maintenance
 
 // Environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
@@ -422,6 +423,17 @@ setInterval(() => {
   console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
   await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
 
+  // Schedule daily maintenance: first run happens 24 h after startup
+  setInterval(async () => {
+    console.log(`[${new Date().toISOString()}] Running daily maintenance…`);
+    try {
+      await runMaintenance(supabase);
+      console.log(`[${new Date().toISOString()}] Daily maintenance complete`);
+    } catch (err) {
+      console.error(`[${new Date().toISOString()}] Daily maintenance error:`, err);
+    }
+  }, 24 * 60 * 60 * 1000);
+  
   while (true) {
     try {
       await runStream();
