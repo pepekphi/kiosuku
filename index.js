@@ -47,7 +47,7 @@ http.createServer((req, res) => {
       buffers: threadBuffers.size,
       lastTweet: new Date(lastTweetTime).toISOString(),
     }));
-  } else if (req.url === '/maintenance') { // For me to manually trigger maintenance with server URL
+  } else if (req.url === '/maintenance') { // For me or the cron job to manually trigger maintenance with server URL
     runMaintenance(supabase)
       .then(() => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -442,17 +442,6 @@ setInterval(() => {
 (async () => {
   console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
   await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
-
-  // Schedule daily maintenance: first run happens 24 h after startup
-  setInterval(async () => {
-    console.log(`[${new Date().toISOString()}] Running daily maintenance…`);
-    try {
-      await runMaintenance(supabase);
-      console.log(`[${new Date().toISOString()}] Daily maintenance complete`);
-    } catch (err) {
-      console.error(`[${new Date().toISOString()}] Daily maintenance error:`, err);
-    }
-  }, 24 * 60 * 60 * 1000);
   
   while (true) {
     try {
