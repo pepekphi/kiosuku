@@ -9,6 +9,7 @@ const http = require('http');
 const { TwitterApi } = require('twitter-api-v2');
 const { createClient } = require('@supabase/supabase-js');
 const { maintenance24h: maintenance24h } = require('./maintenance24h');
+const { maintenance3h: maintenance3h } = require('./maintenance3h');
 
 // Environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
@@ -56,6 +57,16 @@ http.createServer((req, res) => {
       .catch(err => {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end(`Error triggering maintenance24h: ${err.message}\n`);
+      });
+  } else if (req.url === '/maintenance3h') { // For me or the cron job to trigger maintenance3h with server URL
+    maintenance3h(supabase)
+      .then(() => {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('maintenance3h triggered.\n');
+      })
+      .catch(err => {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end(`Error triggering maintenance3h: ${err.message}\n`);
       });
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
