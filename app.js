@@ -223,7 +223,7 @@ function handleTweet(tweet, includes) {
   const convId = tweet.conversation_id;
   const isRoot = convId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
-  const isThreadOpener = /(?:[01]\/(?:\d+|x|\s)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|👇|\bbelow\b)/i.test(text);
+  const isThreadOpener = /(?:[01][\/\.](?:\d+|x|\s)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|\bbelow\b)/i.test(text);
 
   if (threadBuffers.has(convId)) {
     const buf = threadBuffers.get(convId);
