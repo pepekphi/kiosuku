@@ -1,14 +1,14 @@
 {
-  "name": "x-filtered-stream",
+  "name": "KIOSUKU キオスク",
   "version": "1.0.0",
-  "description": "Monitors X filtered stream and sends tweet data to Google Apps Script",
-  "main": "app.js",
+  "description": "KIOSUKU is an automated real-time self-learning algorithmic AI tweet quantification alert and trading engine for cryptocurrencies and the global economy.",
+  "main": "index.js",
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",
     "axios": "^1.3.0",
     "twitter-api-v2": "^1.12.0"
   },
   "scripts": {
-    "start": "node app.js"
+    "start": "node index.js"
   }
 }
