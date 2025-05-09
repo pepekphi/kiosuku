@@ -258,6 +258,7 @@ function handleTweet(tweet, includes) {
   } else {
     forwardTweet(tweet, includes); // Root tweet that isn’t thread-opener → treat as standalone
   }
+}
 
 async function startStream() {
   if (streamInstance) return;
