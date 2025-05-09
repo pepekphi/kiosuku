@@ -1,7 +1,7 @@
 // Settings
 const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
 const WAIT_FOR_THREAD_MS = 7600;
-const MAX_TWEETS_PER_THREAD = 30;
+const MAX_TWEETS_PER_THREAD = 8;
 
 // Dependencies
 const axios = require('axios');
@@ -236,7 +236,7 @@ function handleTweet(tweet, includes) {
   const text = tweet.note_tweet?.text || tweet.text;
   const isThreadOpener = /(?:[01][\/\.](?:\d+|x|\s)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|\bbelow\b)/i.test(text);
 
-  if (threadBuffers.has(convId)) {
+  if (threadBuffers.has(convId)) { // Already buffering this conversation → append
     const buf = threadBuffers.get(convId);
     buf.tweets.push({ tweet, includes });
     if (buf.tweets.length >= MAX_TWEETS_PER_THREAD) {
@@ -246,13 +246,18 @@ function handleTweet(tweet, includes) {
     }
     clearTimeout(buf.timeout);
     buf.timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
-  } else if (isRoot && isThreadOpener) {
+  } else if (isRoot && isThreadOpener) { // First tweet of a detected thread → start buffering
+    
     const timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
     threadBuffers.set(convId, { tweets: [{ tweet, includes }], timeout });
+  } else if (!isRoot) { // Non-root tweet not part of a buffered thread → drop
+    console.log(
+      `[${new Date().toISOString()}] Skipping non-root tweet ${tweet.id} not in thread buffer`
+    );
+    return;
   } else {
-    forwardTweet(tweet, includes);
+    forwardTweet(tweet, includes); // Root tweet that isn’t thread-opener → treat as standalone
   }
-}
 
 async function startStream() {
   if (streamInstance) return;
