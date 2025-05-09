@@ -1,7 +1,7 @@
 // Settings
 const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
 const WAIT_FOR_THREAD_MS = 7600;
-const MAX_TWEETS_PER_THREAD = 20;
+const MAX_TWEETS_PER_THREAD = 30;
 
 // Dependencies
 const axios = require('axios');
