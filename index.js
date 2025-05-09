@@ -77,10 +77,12 @@ http.createServer((req, res) => {
 });
 
 // Memory logging
+/*
 setInterval(() => {
   const mem = (process.memoryUsage().rss / 1024 / 1024).toFixed(2);
   console.log(`[${new Date().toISOString()}] Memory: ${mem} MB | Buffers: ${threadBuffers.size}`);
 }, 300000);
+*/
 
 // Thread buffer expiration
 setInterval(() => {
@@ -178,11 +180,13 @@ async function forwardTweet(tweet, includes) {
     expanded_url: expandedUrl
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
-    else console.log(`[${new Date().toISOString()}] Supabase OK for tweet ${tweet.id}`);
+    // else console.log(`[${new Date().toISOString()}] Supabase OK for tweet ${tweet.id}`);
   });
 
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(`[${new Date().toISOString()}] Webhook OK for tweet ${tweet.id}`))
+    .then(() => {
+      // console.log(`[${new Date().toISOString()}] Webhook OK for tweet ${tweet.id}`);
+    })
     .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
 }
 
@@ -262,9 +266,7 @@ function handleTweet(tweet, includes) {
     const timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
     threadBuffers.set(convId, { tweets: [{ tweet, includes }], timeout });
   } else if (!isRoot) { // Non-root tweet not part of a buffered thread → drop
-    console.log(
-      `[${new Date().toISOString()}] Skipping non-root tweet ${tweet.id} not in thread buffer`
-    );
+    // console.log(`[${new Date().toISOString()}] Skipping non-root tweet ${tweet.id} not in thread buffer`);
     return;
   } else {
     forwardTweet(tweet, includes); // Root tweet that isn’t thread-opener → treat as standalone
