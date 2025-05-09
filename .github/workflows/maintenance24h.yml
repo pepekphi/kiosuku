@@ -3,8 +3,7 @@ name: maintenance24h
 
 on:
   schedule:
-    - cron: '0 0 * * *'    # Runs every day at 00:00 UTC
-    - cron: '*/30 * * * *'    # Runs every 30 minutes
+    - cron: '0 3 * * *'    # Runs every day at 03:00 UTC (better not at 00:00 because that's the daily close I guess)
   workflow_dispatch:       # Optional: Allow manual trigger from GitHub Actions UI
 
 jobs:
