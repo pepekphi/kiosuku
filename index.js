@@ -47,9 +47,19 @@ http.createServer((req, res) => {
       buffers: threadBuffers.size,
       lastTweet: new Date(lastTweetTime).toISOString(),
     }));
+  } else if (req.url === '/maintenance') { // For me to manually trigger maintenance with server URL
+    runMaintenance(supabase)
+      .then(() => {
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('Manual maintenance triggered.\n');
+      })
+      .catch(err => {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end(`Error triggering maintenance: ${err.message}\n`);
+      });
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('x-filtered-stream OK\n'); // This line keeps Railway happy
+    res.end('Kiosuku OK\n'); // This line keeps Railway happy
   }
 }).listen(8080, () => {
   console.log(`[${new Date().toISOString()}] Health check server running on port 8080`);
