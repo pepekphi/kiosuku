@@ -1,5 +1,4 @@
-- Things to setup:
-  - Github
+- Remember to setup:
     - Repository secrets in Github ('Settings' / 'Secrets and variables' / 'Actions' / 'Repository secrets'):
       - MAINTENANCE24H_URL
       - There will also be an URL for every 5h or so, pending...
@@ -9,4 +8,3 @@
       - SUPABASE_URL
       - TWITTER_BEARER_TOKEN
       - WEBHOOK_URL
-  - Supabase database
