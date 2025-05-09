@@ -8,7 +8,7 @@ const axios = require('axios');
 const http = require('http');
 const { TwitterApi } = require('twitter-api-v2');
 const { createClient } = require('@supabase/supabase-js');
-const { runMaintenance } = require('./maintenance'); // Maintenance
+const { maintenance24h: maintenance24h } = require('./maintenance24h');
 
 // Environment variables
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
@@ -47,15 +47,15 @@ http.createServer((req, res) => {
       buffers: threadBuffers.size,
       lastTweet: new Date(lastTweetTime).toISOString(),
     }));
-  } else if (req.url === '/maintenance') { // For me or the cron job to manually trigger maintenance with server URL
-    runMaintenance(supabase)
+  } else if (req.url === '/maintenance24h') { // For me or the cron job to trigger maintenance24h with server URL
+    maintenance24h(supabase)
       .then(() => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
-        res.end('Manual maintenance triggered.\n');
+        res.end('maintenance24h triggered.\n');
       })
       .catch(err => {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
-        res.end(`Error triggering maintenance: ${err.message}\n`);
+        res.end(`Error triggering maintenance24h: ${err.message}\n`);
       });
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
