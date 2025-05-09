@@ -1,4 +1,4 @@
-async function runMaintenance(supabase) {
+async function maintenance24h(supabase) {
   // Reset rank_updated flag for all projects where it is currently true
   try {
     const { error } = await supabase
@@ -8,7 +8,7 @@ async function runMaintenance(supabase) {
 
     if (error) {
       console.error(
-        `[${new Date().toISOString()}] Maintenance error: ${error.message}`
+        `[${new Date().toISOString()}] maintenance24h error: ${error.message}`
       );
     } else {
       console.log(
@@ -17,10 +17,10 @@ async function runMaintenance(supabase) {
     }
   } catch (err) {
     console.error(
-      `[${new Date().toISOString()}] Unexpected error in runMaintenance:`,
+      `[${new Date().toISOString()}] Unexpected error in maintenance24h:`,
       err
     );
   }
 }
 
-module.exports = { runMaintenance };
+module.exports = { maintenance24h };
