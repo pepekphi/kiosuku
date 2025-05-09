@@ -442,7 +442,7 @@ setInterval(() => {
     } catch (err) {
       console.error(`[${new Date().toISOString()}] Daily maintenance error:`, err);
     }
-  }, 24 * 60 * 60 * 1000);
+  }, 0.5 * 60 * 60 * 1000); // Change 0.5 back to 24
   
   while (true) {
     try {
