@@ -11,6 +11,7 @@ jobs:
   trigger-maintenance24h:
     if: github.ref == 'refs/heads/production'   # Only run on production branch
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Hit maintenance24h endpoint
         run: |
