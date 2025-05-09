@@ -1,0 +1,19 @@
+# Make sure to add MAINTENANCE24H_URL secret in Github repository at 'Settings' / 'Secrets and variables' / 'Actions' / 'Repository secrets'
+name: maintenance24h
+
+on:
+  schedule:
+    - cron: '0 0 * * *'    # Runs every day at 00:00 UTC
+    - cron: '20 6 * * *'    # Runs every day at 06:20 UTC
+  workflow_dispatch:       # Optional: Allow manual trigger from GitHub Actions UI
+
+jobs:
+  trigger-maintenance24h:
+    if: github.ref == 'refs/heads/production'   # Only run on production branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hit maintenance24h endpoint
+        run: |
+          curl --fail "$MAINTENANCE24H_URL"
+        env:
+          MAINTENANCE24H_URL: ${{ secrets.MAINTENANCE24H_URL }}
