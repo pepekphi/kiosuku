@@ -8,7 +8,7 @@ on:
 
 jobs:
   trigger-maintenance3h:
-    if: github.ref == 'refs/heads/production'   # Only run on production branch
+    if: github.ref == 'refs/heads/live'   # Only run on production branch
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
