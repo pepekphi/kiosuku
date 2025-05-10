@@ -111,18 +111,21 @@ function getFullTweetText(tweet, includes) {
     }
   });
 
-  tweet.referenced_tweets?.forEach(ref => {
-    const refTweet = includes.tweets.find(t => t.id === ref.id);
-    if (!refTweet) return;
-    let refText = refTweet.note_tweet?.text ?? refTweet.text;
-    (refTweet.entities?.urls || []).forEach(({ url, display_url }) => {
-      if (!display_url.includes('…')) refText = refText.replace(url, display_url);
+  // Only for root tweets, incorporate quoted/retweeted referenced tweets
+  if (tweet.id === tweet.conversation_id) {
+    tweet.referenced_tweets?.forEach(ref => {
+      const refTweet = includes.tweets.find(t => t.id === ref.id);
+      if (!refTweet) return;
+      let refText = refTweet.note_tweet?.text ?? refTweet.text;
+      (refTweet.entities?.urls || []).forEach(({ url, display_url }) => {
+        if (!display_url.includes('…')) refText = refText.replace(url, display_url);
+      });
+      const user = includes.users.find(u => u.id === refTweet.author_id);
+      const handle = user?.username || 'unknown';
+      if (ref.type === 'quoted') text += ` [quoted @${handle}]${refText}[/quoted]`;
+      if (ref.type === 'retweeted') text = `RT @${handle} ${refText}`;
     });
-    const user = includes.users.find(u => u.id === refTweet.author_id);
-    const handle = user?.username || 'unknown';
-    if (ref.type === 'quoted') text += ` [quoted @${handle}]${refText}[/quoted]`;
-    if (ref.type === 'retweeted') text = `RT @${handle} ${refText}`;
-  });
+  }
 
   // NEW: Append article title and preview_text if present
   if (tweet.article) {
@@ -254,7 +257,7 @@ function handleTweet(tweet, includes) {
   if (threadBuffers.has(convId)) { // Already buffering this conversation → append
     const buf = threadBuffers.get(convId);
     buf.tweets.push({ tweet, includes });
-    if (buf.tweets.length > MAX_TWEETS_PER_THREAD) {
+    if (buf.tweets.length >= MAX_TWEETS_PER_THREAD) {
       // console.warn(`[${new Date().toISOString()}] Thread ${convId} exceeded max. Flushing.`);
       flushThread(convId);
       return;
