@@ -235,11 +235,11 @@ async function flushThread(conversationId) {
     is_thread: isThread
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
-    else console.log(`[${new Date().toISOString()}] Thread logged: ${conversationId}`);
+    else console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
   });
 
   axios.post(WEBHOOK_URL, payload)
-    .then(() => console.log(`[${new Date().toISOString()}] Thread webhook OK for ${conversationId}`))
+    // .then(() => console.log(`[${new Date().toISOString()}] Thread webhook OK for ${conversationId}`))
     .catch(err => console.error(`[${new Date().toISOString()}] Thread webhook error:`, err.message));
 
   threadBuffers.delete(conversationId);
@@ -254,8 +254,8 @@ function handleTweet(tweet, includes) {
   if (threadBuffers.has(convId)) { // Already buffering this conversation → append
     const buf = threadBuffers.get(convId);
     buf.tweets.push({ tweet, includes });
-    if (buf.tweets.length >= MAX_TWEETS_PER_THREAD) {
-      console.warn(`[${new Date().toISOString()}] Thread ${convId} exceeded max. Flushing.`);
+    if (buf.tweets.length > MAX_TWEETS_PER_THREAD) {
+      // console.warn(`[${new Date().toISOString()}] Thread ${convId} exceeded max. Flushing.`);
       flushThread(convId);
       return;
     }
