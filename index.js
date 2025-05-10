@@ -173,7 +173,7 @@ async function forwardTweet(tweet, includes) {
   supabase.from('posts').insert([{
     post_id: tweet.id,
     post_timestamp: tweet.created_at,
-    added_timestamp: new Date().toISOString(),
+    fetch_timestamp: new Date().toISOString(),
     account: username,
     conversation_id: tweet.conversation_id,
     post_text: text,
@@ -227,7 +227,7 @@ async function flushThread(conversationId) {
   supabase.from('posts').insert([{
     post_id: conversationId,
     post_timestamp: first.tweet.created_at,
-    added_timestamp: new Date().toISOString(),
+    fetch_timestamp: new Date().toISOString(),
     account: name,
     conversation_id: conversationId,
     post_text: merged,
