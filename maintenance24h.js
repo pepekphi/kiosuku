@@ -1,8 +1,8 @@
 async function maintenance24h(supabase) {
-  // Reset rank_updated flag for all projects where it is currently true
+  // Reset rank_updated flag for all accounts_projects where it is currently true
   try {
     const { error } = await supabase
-      .from('Projects')
+      .from('accounts_projects')
       .update({ rank_updated: false })
       .eq('rank_updated', true);  // Only update rows where rank_updated is TRUE
 
@@ -12,7 +12,7 @@ async function maintenance24h(supabase) {
       );
     } else {
       console.log(
-        `[${new Date().toISOString()}] rank_updated flag reset to false for projects where it was true`
+        `[${new Date().toISOString()}] rank_updated flag reset to false for accounts_projects where it was true`
       );
     }
   } catch (err) {
