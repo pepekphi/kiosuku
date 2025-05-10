@@ -170,7 +170,7 @@ async function forwardTweet(tweet, includes) {
     tweetExpandedURL: expandedUrl,
   };
 
-  supabase.from('Posts').insert([{
+  supabase.from('posts').insert([{
     post_id: tweet.id,
     post_timestamp: tweet.created_at,
     added_timestamp: new Date().toISOString(),
@@ -224,7 +224,7 @@ async function flushThread(conversationId) {
     tweetExpandedURL: expandedUrl
   };
 
-  supabase.from('Posts').insert([{
+  supabase.from('posts').insert([{
     post_id: conversationId,
     post_timestamp: first.tweet.created_at,
     added_timestamp: new Date().toISOString(),
