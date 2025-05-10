@@ -174,7 +174,7 @@ async function forwardTweet(tweet, includes) {
     post_id: tweet.id,
     post_timestamp: tweet.created_at,
     added_timestamp: new Date().toISOString(),
-    x_id: username,
+    account: username,
     conversation_id: tweet.conversation_id,
     post_text: text,
     expanded_url: expandedUrl
@@ -228,7 +228,7 @@ async function flushThread(conversationId) {
     post_id: conversationId,
     post_timestamp: first.tweet.created_at,
     added_timestamp: new Date().toISOString(),
-    x_id: name,
+    account: name,
     conversation_id: conversationId,
     post_text: merged,
     expanded_url: expandedUrl,
