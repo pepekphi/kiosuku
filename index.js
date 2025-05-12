@@ -199,7 +199,7 @@ async function forwardTweet(tweet, includes) {
     account: username,
     conversation_id: tweet.conversation_id,
     post_text: text,
-    expanded_url: expandedUrl
+    page_url: expandedUrl
   };
   if (mediaText) insertData.media_alt_text = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
@@ -261,7 +261,7 @@ async function flushThread(conversationId) {
     account: name,
     conversation_id: conversationId,
     post_text: merged,
-    expanded_url: expandedUrl,
+    page_url: expandedUrl,
     is_thread: isThread
   };
   if (mediaText) insertData.media_alt_text = mediaText; // Only if it is not ""
