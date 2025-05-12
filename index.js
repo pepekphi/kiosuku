@@ -200,7 +200,7 @@ async function forwardTweet(tweet, includes) {
     conversation_id: tweet.conversation_id,
     post_text: text,
     expanded_url: expandedUrl,
-    media_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
+    media_alt_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
     media_url: mediaUrl
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
@@ -259,7 +259,7 @@ async function flushThread(conversationId) {
     post_text: merged,
     expanded_url: expandedUrl,
     is_thread: isThread,
-    media_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
+    media_alt_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
     media_url: mediaUrl
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
