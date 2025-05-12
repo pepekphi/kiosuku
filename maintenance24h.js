@@ -1,5 +1,5 @@
 async function maintenance24h(supabase) {
-  // Reset rank_updated flag for all accounts_projects where it is currently true
+  // Reset rank_updated flag for all accounts_projects where it is currently true.
   try {
     const { error } = await supabase
       .from('accounts_projects')
