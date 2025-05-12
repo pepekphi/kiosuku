@@ -192,20 +192,24 @@ async function forwardTweet(tweet, includes) {
 
   const { mediaText, mediaUrl } = getMediaInfo(tweet, includes);
 
-  supabase.from('posts').insert([{
+  const insertData = {
     post_id: tweet.id,
     post_timestamp: tweet.created_at,
     fetch_timestamp: new Date().toISOString(),
     account: username,
     conversation_id: tweet.conversation_id,
     post_text: text,
-    expanded_url: expandedUrl,
-    media_alt_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
-    media_url: mediaUrl
-  }]).then(({ error }) => {
-    if (error) console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
-    // else console.log(`[${new Date().toISOString()}] Supabase OK for tweet ${tweet.id}`);
-  });
+    expanded_url: expandedUrl
+  };
+  if (mediaText) insertData.media_alt_text = mediaText; // Only if it is not ""
+  if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
+
+  supabase.from('posts').insert([ insertData ])
+    .then(({ error }) => {
+      if (error) {
+        console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
+      }
+    });
 
   axios.post(WEBHOOK_URL, payload)
     .then(() => {
@@ -250,7 +254,7 @@ async function flushThread(conversationId) {
 
   const { mediaText, mediaUrl } = getMediaInfo(first.tweet, first.includes);
 
-  supabase.from('posts').insert([{
+  const insertData = {
     post_id: conversationId,
     post_timestamp: first.tweet.created_at,
     fetch_timestamp: new Date().toISOString(),
@@ -258,13 +262,19 @@ async function flushThread(conversationId) {
     conversation_id: conversationId,
     post_text: merged,
     expanded_url: expandedUrl,
-    is_thread: isThread,
-    media_alt_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
-    media_url: mediaUrl
-  }]).then(({ error }) => {
-    if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
-    else console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
-  });
+    is_thread: isThread
+  };
+  if (mediaText) insertData.media_alt_text = mediaText; // Only if it is not ""
+  if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
+
+  supabase.from('posts').insert([ insertData ])
+    .then(({ error }) => {
+      if (error) {
+        console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
+      } else {
+        console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
+      }
+    });
 
   axios.post(WEBHOOK_URL, payload)
     // .then(() => console.log(`[${new Date().toISOString()}] Thread webhook OK for ${conversationId}`))
