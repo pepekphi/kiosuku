@@ -98,6 +98,23 @@ setInterval(() => {
   }
 }, 3600000); // Every 1 hour
 
+// Helper: select prioritized media and extract fields
+function getMediaInfo(tweet, includes) {
+  const mediaKeys = tweet.attachments?.media_keys || [];
+  const mediaItems = mediaKeys
+    .map(key => includes.media?.find(m => m.media_key === key))
+    .filter(Boolean);
+
+  const selected = mediaItems.find(m => m.type === 'photo')
+    || mediaItems.find(m => m.type === 'video')
+    || mediaItems.find(m => m.type === 'animated_gif')
+    || null;
+
+  const mediaText = selected?.alt_text || '';
+  const mediaUrl = selected?.url || selected?.preview_image_url || '';
+  return { mediaText, mediaUrl };
+}
+
 function forceFullRestart() {
   console.log(`[${new Date().toISOString()}] Forcing container restart`);
   process.exit(1);
@@ -173,6 +190,8 @@ async function forwardTweet(tweet, includes) {
     tweetExpandedURL: expandedUrl,
   };
 
+  const { mediaText, mediaUrl } = getMediaInfo(tweet, includes);
+
   supabase.from('posts').insert([{
     post_id: tweet.id,
     post_timestamp: tweet.created_at,
@@ -180,7 +199,9 @@ async function forwardTweet(tweet, includes) {
     account: username,
     conversation_id: tweet.conversation_id,
     post_text: text,
-    expanded_url: expandedUrl
+    expanded_url: expandedUrl,
+    media_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
+    media_url: mediaUrl
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
     // else console.log(`[${new Date().toISOString()}] Supabase OK for tweet ${tweet.id}`);
@@ -227,6 +248,8 @@ async function flushThread(conversationId) {
     tweetExpandedURL: expandedUrl
   };
 
+  const { mediaText, mediaUrl } = getMediaInfo(first.tweet, first.includes);
+
   supabase.from('posts').insert([{
     post_id: conversationId,
     post_timestamp: first.tweet.created_at,
@@ -235,7 +258,9 @@ async function flushThread(conversationId) {
     conversation_id: conversationId,
     post_text: merged,
     expanded_url: expandedUrl,
-    is_thread: isThread
+    is_thread: isThread,
+    media_text: mediaText, // Ideally this and the next one would only be added if they exist, should maybe change this code later.
+    media_url: mediaUrl
   }]).then(({ error }) => {
     if (error) console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
     else console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
@@ -288,9 +313,10 @@ async function startStream() {
   }, 60000);
 
   streamInstance = await twitterClient.v2.searchStream({
-    'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,article',
+    'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,article,attachments',
     'user.fields': 'username',
-    expansions: 'author_id,referenced_tweets.id'
+    'media.fields': 'media_key,type,url,preview_image_url,alt_text',
+    expansions: 'author_id,referenced_tweets.id,attachments.media_keys'
   });
 
   if (!streamInstance || !streamInstance[Symbol.asyncIterator]) {
