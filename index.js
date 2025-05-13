@@ -197,7 +197,7 @@ async function forwardTweet(tweet, includes) {
     post_timestamp: tweet.created_at,
     fetch_timestamp: new Date().toISOString(),
     account: username,
-    conversation_id: tweet.conversation_id,
+    // conversation_id: tweet.conversation_id,
     post_text: text
   };
   if (expandedUrl) insertData.page_url = expandedUrl; // Only if it is not ""
@@ -259,7 +259,7 @@ async function flushThread(conversationId) {
     post_timestamp: first.tweet.created_at,
     fetch_timestamp: new Date().toISOString(),
     account: name,
-    conversation_id: conversationId,
+    // conversation_id: conversationId,
     post_text: merged,
     is_thread: isThread
   };
