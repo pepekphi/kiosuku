@@ -1,4 +1,5 @@
 // Settings
+const PAUSE_MODE = false; // Set to true to pause the server
 const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
 const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
@@ -527,6 +528,12 @@ process.on('unhandledRejection', reason => {
 
 // 🆕 Boot delay + run loop
 (async () => {
+  if (PAUSE_MODE) {
+    console.log(`[${new Date().toISOString()}] PAUSE_MODE enabled → sleeping indefinitely.`);
+    // never resolves, so nothing else runs
+    await new Promise(() => {});
+  }
+  
   console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
   await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
   
