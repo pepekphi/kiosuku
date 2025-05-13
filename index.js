@@ -201,7 +201,7 @@ async function forwardTweet(tweet, includes) {
     post_text: text,
     page_url: expandedUrl
   };
-  if (mediaText) insertData.media_alt_text = mediaText; // Only if it is not ""
+  if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
 
   supabase.from('posts').insert([ insertData ])
@@ -264,7 +264,7 @@ async function flushThread(conversationId) {
     page_url: expandedUrl,
     is_thread: isThread
   };
-  if (mediaText) insertData.media_alt_text = mediaText; // Only if it is not ""
+  if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
 
   supabase.from('posts').insert([ insertData ])
