@@ -198,9 +198,9 @@ async function forwardTweet(tweet, includes) {
     fetch_timestamp: new Date().toISOString(),
     account: username,
     conversation_id: tweet.conversation_id,
-    post_text: text,
-    page_url: expandedUrl
+    post_text: text
   };
+  if (expandedUrl) insertData.page_url = expandedUrl; // Only if it is not ""
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
 
@@ -261,9 +261,9 @@ async function flushThread(conversationId) {
     account: name,
     conversation_id: conversationId,
     post_text: merged,
-    page_url: expandedUrl,
     is_thread: isThread
   };
+  if (expandedUrl) insertData.page_url = expandedUrl; // Only if it is not ""
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
 
