@@ -27,6 +27,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Global variables
 let streamInstance;
+let streamAbortController;   // ← NEW
 let isShuttingDown = false;
 let inactivityInterval;
 let softRateLimit = false;
@@ -322,16 +323,24 @@ async function startStream() {
     }
   }, 60000);
 
+  // Create a fresh controller for this connection
+  streamAbortController = new AbortController();
+
   streamInstance = await twitterClient.v2.searchStream({
     'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,article,attachments',
     'user.fields': 'username',
     'media.fields': 'media_key,type,url,preview_image_url,alt_text',
     expansions: 'author_id,referenced_tweets.id,attachments.media_keys'
+  }, {
+    signal: streamAbortController.signal
   });
 
-  if (!streamInstance || !streamInstance[Symbol.asyncIterator]) {
-    throw new Error('Invalid stream instance - not async iterable.');
-  }
+  // Listen for the socket close so we null out our state immediately
+  streamInstance.on('close', () => {
+    console.log(`[${new Date().toISOString()}] Stream socket closed`);
+    streamInstance = null;
+    streamAbortController = null;
+  });
 
   console.log(`[${new Date().toISOString()}] Connected to Twitter stream`);
   lastTweetTime = Date.now();
@@ -350,8 +359,12 @@ async function startStream() {
   } finally {
     console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
     clearInterval(inactivityInterval);
-    streamInstance?.destroy?.();
+
+    if (streamAbortController) {
+      streamAbortController.abort();
+    }
     streamInstance = null;
+    streamAbortController = null;
   }
 }
 
@@ -368,9 +381,41 @@ async function startStreamSafe() {
   }
 }
 
+/**
+ * Given an Axios/Twitter‐API error and the attempt count,
+ * return the delay (ms) before the next reconnect.
+ */
+function getNextDelay(error, attempts) {
+  const status = error.response?.status;
+  const headers = error.response?.headers || {};
+
+  if (status === 429) {
+    // Respect x-rate-limit-reset
+    const reset = parseInt(headers['x-rate-limit-reset'], 10);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const waitSec = Math.max((reset || nowSec + 60) - nowSec, 60);
+    return waitSec * 1000;
+  }
+
+  if (status === 409) {
+    // Conflict → exponential up to 30 min
+    return Math.min(1000 * Math.pow(2, attempts), 30 * 60 * 1000);
+  }
+
+  if (status === 503) {
+    // Service unavailable → 5 min + 0–2 min jitter
+    const base = 5 * 60 * 1000;
+    const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
+    return base + jitter;
+  }
+
+  // Default exponential backoff: 30 s × 2^(attempts−1), capped at 5 min
+  const initial = 30 * 1000;
+  const maxDelay = 5 * 60 * 1000;
+  return Math.min(initial * Math.pow(2, attempts - 1), maxDelay);
+}
+
 async function runStream() {
-  let reconnectDelay = 30000;
-  const maxDelay = 300000;
   let attempts = 0;
   const maxAttempts = 10;
 
@@ -389,7 +434,6 @@ async function runStream() {
     let startError = null;
     try {
       await startStreamSafe();
-      reconnectDelay = 30000;
       attempts = 0;
       break;  // ← stop the retry loop on success
     } catch (err) {
@@ -404,62 +448,49 @@ async function runStream() {
         startError,
         startError.stack
       );
-      streamInstance?.destroy?.();
-      streamInstance = null;
 
+      // clean up old connection
+      if (streamAbortController) {
+        streamAbortController.abort();
+      }
+      streamInstance = null;
+      streamAbortController = null;
+
+      // preserve your soft-rate-limit activation on 429
       if (status === 429) {
         const headers = startError.response?.headers || {};
         const reset = parseInt(headers['x-rate-limit-reset'], 10);
         const nowSec = Math.floor(Date.now() / 1000);
         const wait = Math.max((reset || nowSec + 60) - nowSec, 60);
         const backoffUntil = Date.now() + 15 * 60 * 1000;
-
-        console.warn(`[${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()}`);
+        console.warn(
+          `[${now}] Twitter 429. Entering soft rate limit until ${new Date(backoffUntil).toISOString()}`
+        );
         if (!softRateLimit) {
           softRateLimit = true;
           softRateLimitUntil = backoffUntil;
-          console.warn(`[${now}] Activating soft rate limit until ${new Date(backoffUntil).toISOString()}`);
           setTimeout(() => {
             softRateLimit = false;
             softRateLimitUntil = null;
             console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
           }, 15 * 60 * 1000);
         }
-        await new Promise(r => setTimeout(r, wait * 1000));
-        continue;
       }
 
-      if (status === 409) {
-        const delay = Math.min(reconnectDelay * 2, 30 * 60 * 1000); // Max 30 mins
-        console.warn(`[${now}] Twitter 409 Conflict. Another stream is already active. Waiting ${delay / 1000}s before retrying...`);
-        await new Promise(r => setTimeout(r, delay));
-        reconnectDelay = delay;
-        continue;
-      }
-
-      if (status === 503) {
-        const base = 5 * 60 * 1000;
-        const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
-        const delay = base + jitter;
-        console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
-        await new Promise(r => setTimeout(r, delay));
-        continue;
-      }
-
-      if (startError.code === 'TooManyConnections') {
-        console.warn(`[${now}] Too many connections. Backing off.`);
-      }
-
-      console.warn(`[${now}] Unknown stream error. Applying backoff.`);
-
-      console.log(`[${now}] Retry in ${reconnectDelay / 1000}s`);
-      await new Promise(r => setTimeout(r, reconnectDelay));
-      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+      // centralized backoff for every error type
+      const delayMs = getNextDelay(startError, attempts);
+      console.warn(`[${now}] Waiting ${delayMs / 1000}s before retrying...`);
+      await new Promise(r => setTimeout(r, delayMs));
     }
     
     if (attempts >= maxAttempts) {
-      console.error(`[${new Date().toISOString()}] Max attempts reached. Restarting.`);
-      forceFullRestart();
+      const now = new Date().toISOString();
+      console.error(`[${now}] Max attempts reached. Pausing 10m before next try (no full restart).`);
+      // long backoff instead of process.exit()
+      await new Promise(r => setTimeout(r, 10 * 60 * 1000));
+      attempts = 0;
+      console.log(`[${new Date().toISOString()}] Resuming stream attempts.`);
+      continue;
     }
   }
 }
@@ -468,7 +499,11 @@ async function runStream() {
 function shutdown() {
   isShuttingDown = true;
   console.log(`[${new Date().toISOString()}] Shutdown signal received`);
-  streamInstance?.destroy();
+  if (streamAbortController) {
+    streamAbortController.abort();
+  } else {
+    streamInstance?.destroy();
+  }
   clearInterval(inactivityInterval);
   process.exit(0);
 }
