@@ -1,6 +1,5 @@
 // Settings
-const PAUSE_MODE = true; // Set to true to pause the server
-const INACTIVITY_TIMEOUT = 120 * 60 * 1000;
+const INACTIVITY_TIMEOUT = 120 * 60 * 1000; // 2 hours
 const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
 
@@ -17,21 +16,17 @@ const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
+  console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
+  process.exit(0);
+}
 
 // Clients
-let twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN, {
-  requestOptions: {
-    headers: {
-      // identify your app version in every request
-      'User-Agent': 'kiosuku2/2.0.0'
-    }
-  }
-});
+const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Global variables
 let streamInstance;
-let streamAbortController;   // ← NEW
 let isShuttingDown = false;
 let inactivityInterval;
 let softRateLimit = false;
@@ -39,38 +34,6 @@ let softRateLimitUntil = null;
 let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
-
-// ← NEW: allow us to inspect & kill lingering sockets
-const { execSync } = require('child_process');
-
-/**
- * Kill any TIME_WAIT / orphaned TCP connections to X.com (104.244.42.*)
- * Logs any you had open, then you can optionally script kills if needed.
- */
-function killOldXConnections() {
-  try {
-    const out = execSync(
-      `lsof -iTCP -sTCP:TIME_WAIT 2>/dev/null | grep 104.244.42.`
-    ).toString().trim();
-    if (out) {
-      console.log('[startup] lingering X.com sockets:\n', out);
-      // You could parse the PIDs here and kill them if you want:
-      out.split('\n').forEach(line => {
-        const pid = line.split(/\s+/)[1];
-        process.kill(pid, 'SIGTERM');
-      });
-    } else {
-      console.log('[startup] no lingering X.com sockets found');
-    }
-  } catch {
-    console.log('[startup] no lingering X.com sockets or insufficient permissions');
-  }
-}
-
-if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
-  console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
-  process.exit(0); // Exit cleanly to prevent Railway from restarting (zero code 0 is needed)
-}
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
@@ -154,7 +117,7 @@ function getMediaInfo(tweet, includes) {
 
 function forceFullRestart() {
   console.log(`[${new Date().toISOString()}] Forcing container restart`);
-  process.exit(1); // Code 1 means Railway will restart
+  process.exit(1);
 }
 
 function getFullTweetText(tweet, includes) {
@@ -351,56 +314,24 @@ function handleTweet(tweet, includes) {
 async function startStream() {
   if (streamInstance) return;
 
-  // Track “last data” to catch missing heartbeats
-  let lastHeartbeat = Date.now();
-
-  // Existing inactivity watchdog (120 min without any tweet → full restart)
   inactivityInterval = setInterval(() => {
     if (Date.now() - lastTweetTime > INACTIVITY_TIMEOUT) {
-      console.warn(`[${new Date().toISOString()}] No tweets in 120 minutes. Restarting.`);
+      console.warn(`[${new Date().toISOString()}] No tweets in >= 120 minutes. Restarting.`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
-  }, 600000); // Check every 10 minutes
-
-  // New: heartbeat checker (no data for 20 s → reconnect)
-  const heartbeatInterval = setInterval(() => {
-    // only run when we actually have an active stream
-    if (!streamInstance) return;
-
-    if (Date.now() - lastHeartbeat > 20_000) {
-      console.warn(`[${new Date().toISOString()}] No heartbeat in 20s → reconnecting`);
-      // safely abort if it exists
-      streamAbortController?.abort();
-      clearInterval(heartbeatInterval);
-    }
-  }, 5000);
-
-  // Create a fresh controller for this connection
-  streamAbortController = new AbortController();
+  }, 600000);
 
   streamInstance = await twitterClient.v2.searchStream({
     'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,article,attachments',
     'user.fields': 'username',
     'media.fields': 'media_key,type,url,preview_image_url,alt_text',
     expansions: 'author_id,referenced_tweets.id,attachments.media_keys'
-  }, {
-    signal: streamAbortController.signal
   });
 
-  // NEW: every time any chunk (tweet or heartbeat newline) arrives,
-  // update lastHeartbeat so we know the connection is still alive.
-  streamInstance.on('data', () => {
-    lastHeartbeat = Date.now();
-  });
-
-  // Listen for the socket close so we null out our state immediately
-  streamInstance.on('close', () => {
-    console.log(`[${new Date().toISOString()}] Stream socket closed`);
-    clearInterval(heartbeatInterval);
-    streamInstance = null;
-    streamAbortController = null;
-  });
+  if (!streamInstance || !streamInstance[Symbol.asyncIterator]) {
+    throw new Error('Invalid stream instance - not async iterable.');
+  }
 
   console.log(`[${new Date().toISOString()}] Connected to Twitter stream`);
   lastTweetTime = Date.now();
@@ -419,13 +350,8 @@ async function startStream() {
   } finally {
     console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
     clearInterval(inactivityInterval);
-    clearInterval(heartbeatInterval);
-
-    if (streamAbortController) {
-      streamAbortController.abort();
-    }
+    streamInstance?.destroy?.();
     streamInstance = null;
-    streamAbortController = null;
   }
 }
 
@@ -435,30 +361,6 @@ async function startStreamSafe() {
     return;
   }
   streamStarting = true;
-
-  // ◆ Refresh client to honor DNS TTL & keep UA header fresh
-  twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN, {
-    requestOptions: {
-      headers: {
-        'User-Agent': 'kiosuku/1.0.0'
-      }
-    }
-  });
-
-  // Clean up any lingering stream before opening a new one
-  if (streamAbortController) {
-    console.log(`[${new Date().toISOString()}] Cleaning up previous stream before reconnecting.`);
-    streamAbortController.abort();
-    // some streams expose .destroy() instead of .close()
-    if (typeof streamInstance?.destroy === 'function') {
-      streamInstance.destroy();
-    } else if (typeof streamInstance?.close === 'function') {
-      streamInstance.close();
-    }
-    streamInstance = null;
-    streamAbortController = null;
-  }
-
   try {
     await startStream();
   } finally {
@@ -466,47 +368,9 @@ async function startStreamSafe() {
   }
 }
 
-/**
- * Given an Axios/Twitter‐API error and the attempt count,
- * return the delay (ms) before the next reconnect.
- */
-function getNextDelay(error, attempts) {
-  // 1) Linear back-off for low-level network errors
-  if (error.code && ['ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN'].includes(error.code)) {
-    // attempts*250ms, capped at 16s
-    return Math.min(attempts * 250, 16_000);
-  }
-
-  const status = error.response?.status;
-  const headers = error.response?.headers || {};
-
-  // 2) 429 → use X rate-limit-reset
-  if (status === 429) {
-    const reset = parseInt(headers['x-rate-limit-reset'], 10);
-    const nowSec = Math.floor(Date.now() / 1000);
-    const waitSec = Math.max((reset || nowSec + 60) - nowSec, 60);
-    return waitSec * 1000;
-  }
-
-  // 3) 409 → exponential up to 30m
-  if (status === 409) {
-    return Math.min(1000 * Math.pow(2, attempts), 30 * 60 * 1000);
-  }
-
-  // 4) 503 → 5m + jitter
-  if (status === 503) {
-    const base = 5 * 60 * 1000;
-    const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
-    return base + jitter;
-  }
-
-  // 5) all other HTTP errors → exponential 60s×2^(n−1), capped at 1h
-  const initial = 60 * 1000;         // first retry is now 1 minute
-  const maxDelay = 60 * 60 * 1000;   // cap at 1 hour
-  return Math.min(initial * Math.pow(2, attempts - 1), maxDelay);
-}
-
 async function runStream() {
+  let reconnectDelay = 600000; // 10 min
+  const maxDelay = 120 * 60 * 1000; // 2 hours
   let attempts = 0;
   const maxAttempts = 10;
 
@@ -525,6 +389,7 @@ async function runStream() {
     let startError = null;
     try {
       await startStreamSafe();
+      reconnectDelay = 30000;
       attempts = 0;
       break;  // ← stop the retry loop on success
     } catch (err) {
@@ -534,59 +399,67 @@ async function runStream() {
     if (startError) {
       const now = new Date().toISOString();
       const status = startError.response?.status;
-
-      // Fail-fast on authentication errors
-      if (status === 401 || status === 403) {
-        console.error(
-          `[${now}] Authentication error (${status}). ` +
-          `Please verify your TWITTER_BEARER_TOKEN; exiting.`
-        );
-        process.exit(0); // Exit cleanly to prevent Railway from restarting (zero code 0 is needed)
-      }
-      
       console.error(
         `[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`,
         startError,
         startError.stack
       );
-
-      // clean up old connection
-      if (streamAbortController) {
-        streamAbortController.abort();
-      }
+      streamInstance?.destroy?.();
       streamInstance = null;
-      streamAbortController = null;
 
-      // inside runStream’s catch(startError):
       if (status === 429) {
-        const headers = startError.response.headers || {};
-        const resetSec = parseInt(headers['x-rate-limit-reset'], 10);
-        const nowSec  = Math.floor(Date.now() / 1000);
-        // ensure at least 60s if header is missing or in the past
-        const waitSec = Math.max((resetSec || nowSec + 60) - nowSec, 60);
+        const headers = startError.response?.headers || {};
+        const reset = parseInt(headers['x-rate-limit-reset'], 10);
+        const nowSec = Math.floor(Date.now() / 1000);
+        const wait = Math.max((reset || nowSec + 60) - nowSec, 60);
+        const backoffUntil = Date.now() + 15 * 60 * 1000;
 
-        console.warn(
-          `[${now}] 429 from Twitter. `
-          + `Waiting ${waitSec}s until ${new Date(resetSec * 1000).toISOString()} before reconnect…`
-        );
-        await new Promise(r => setTimeout(r, waitSec * 1000));
-        continue;  // skip any other backoff logic
-      }
-
-      // (no more 429 fallback here—everything else still hits centralized backoff)
-      const delayMs = getNextDelay(startError, attempts);
-      console.warn(`[${now}] Waiting ${delayMs/1000}s before retrying…`);
-      await new Promise(r => setTimeout(r, delayMs));
-    
-      if (attempts >= maxAttempts) {
-        const now = new Date().toISOString();
-        console.error(`[${now}] Max attempts reached. Pausing 10m before next try (no full restart).`);
-        // long backoff instead of process.exit()
-        await new Promise(r => setTimeout(r, 10 * 60 * 1000));
-        attempts = 0;
-        console.log(`[${new Date().toISOString()}] Resuming stream attempts.`);
+        console.warn(`[${now}] Twitter 429. Waiting ${wait}s, then entering soft rate limit until ${new Date(backoffUntil).toISOString()}`);
+        if (!softRateLimit) {
+          softRateLimit = true;
+          softRateLimitUntil = backoffUntil;
+          console.warn(`[${now}] Activating soft rate limit until ${new Date(backoffUntil).toISOString()}`);
+          setTimeout(() => {
+            softRateLimit = false;
+            softRateLimitUntil = null;
+            console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
+          }, 15 * 60 * 1000);
+        }
+        await new Promise(r => setTimeout(r, wait * 1000));
         continue;
       }
+
+      if (status === 409) {
+        const delay = Math.min(reconnectDelay * 2, 30 * 60 * 1000); // Max 30 mins
+        console.warn(`[${now}] Twitter 409 Conflict. Another stream is already active. Waiting ${delay / 1000}s before retrying...`);
+        await new Promise(r => setTimeout(r, delay));
+        reconnectDelay = delay;
+        continue;
+      }
+
+      if (status === 503) {
+        const base = 5 * 60 * 1000;
+        const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
+        const delay = base + jitter;
+        console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+
+      if (startError.code === 'TooManyConnections') {
+        console.warn(`[${now}] Too many connections. Backing off.`);
+      }
+
+      console.warn(`[${now}] Unknown stream error. Applying backoff.`);
+
+      console.log(`[${now}] Retry in ${reconnectDelay / 1000}s`);
+      await new Promise(r => setTimeout(r, reconnectDelay));
+      reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+    }
+    
+    if (attempts >= maxAttempts) {
+      console.error(`[${new Date().toISOString()}] Max attempts reached. Restarting.`);
+      forceFullRestart();
     }
   }
 }
@@ -595,20 +468,9 @@ async function runStream() {
 function shutdown() {
   isShuttingDown = true;
   console.log(`[${new Date().toISOString()}] Shutdown signal received`);
-  if (streamAbortController) {
-    streamAbortController.abort();
-  }
-  if (streamInstance) {
-    if (typeof streamInstance.destroy === 'function') {
-      streamInstance.destroy();
-    } else {
-      streamInstance.close?.();
-    }
-  }
-  streamInstance = null;
-  streamAbortController = null;
+  streamInstance?.destroy();
   clearInterval(inactivityInterval);
-  process.exit(0); // Code 0 means Railway won't restart
+  process.exit(0);
 }
 
 process.on('SIGTERM', () => {
@@ -616,7 +478,6 @@ process.on('SIGTERM', () => {
   shutdown();
 });
 process.on('SIGINT', shutdown);
-
 process.on('uncaughtException', err => {
   console.error(`[${new Date().toISOString()}] Uncaught Exception:`, err);
 });
@@ -626,15 +487,6 @@ process.on('unhandledRejection', reason => {
 
 // 🆕 Boot delay + run loop
 (async () => {
-  if (PAUSE_MODE) {
-    console.log(`[${new Date().toISOString()}] PAUSE_MODE enabled → sleeping indefinitely.`);
-    // never resolves, so nothing else runs
-    await new Promise(() => {});
-  }
-
-  // ← NEW: kill any orphaned TCP connections before we open a new one
-  killOldXConnections();
-  
   console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
   await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
   
