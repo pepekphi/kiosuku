@@ -1,6 +1,6 @@
 // Settings
 const PAUSE_MODE = false; // Set to true to pause the server
-const INACTIVITY_TIMEOUT = 90 * 60 * 1000;
+const INACTIVITY_TIMEOUT = 120 * 60 * 1000;
 const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
 
@@ -17,13 +17,16 @@ const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
-if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
-  console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
-  process.exit(1);
-}
 
 // Clients
-const twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN);
+let twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN, {
+  requestOptions: {
+    headers: {
+      // identify your app version in every request
+      'User-Agent': 'kiosuku/1.0.0'
+    }
+  }
+});
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Global variables
@@ -36,6 +39,38 @@ let softRateLimitUntil = null;
 let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
+
+// ← NEW: allow us to inspect & kill lingering sockets
+const { execSync } = require('child_process');
+
+/**
+ * Kill any TIME_WAIT / orphaned TCP connections to X.com (104.244.42.*)
+ * Logs any you had open, then you can optionally script kills if needed.
+ */
+function killOldXConnections() {
+  try {
+    const out = execSync(
+      `lsof -iTCP -sTCP:TIME_WAIT | grep 104.244.42.`
+    ).toString().trim();
+    if (out) {
+      console.log('[startup] lingering X.com sockets:\n', out);
+      // You could parse the PIDs here and kill them if you want:
+      out.split('\n').forEach(line => {
+        const pid = line.split(/\s+/)[1];
+        process.kill(pid, 'SIGTERM');
+      });
+    } else {
+      console.log('[startup] no lingering X.com sockets found');
+    }
+  } catch {
+    console.log('[startup] no lingering X.com sockets or insufficient permissions');
+  }
+}
+
+if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
+  console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
+  process.exit(0); // Exit cleanly to prevent Railway from restarting (zero code 0 is needed)
+}
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
@@ -119,7 +154,7 @@ function getMediaInfo(tweet, includes) {
 
 function forceFullRestart() {
   console.log(`[${new Date().toISOString()}] Forcing container restart`);
-  process.exit(1);
+  process.exit(1); // Code 1 means Railway will restart
 }
 
 function getFullTweetText(tweet, includes) {
@@ -316,13 +351,27 @@ function handleTweet(tweet, includes) {
 async function startStream() {
   if (streamInstance) return;
 
+  // Track “last data” to catch missing heartbeats
+  let lastHeartbeat = Date.now();
+
+  // Existing inactivity watchdog (120 min without any tweet → full restart)
   inactivityInterval = setInterval(() => {
     if (Date.now() - lastTweetTime > INACTIVITY_TIMEOUT) {
-      console.warn(`[${new Date().toISOString()}] No tweets in 90 minutes. Restarting.`);
+      console.warn(`[${new Date().toISOString()}] No tweets in 120 minutes. Restarting.`);
       clearInterval(inactivityInterval);
       forceFullRestart();
     }
-  }, 60000);
+  }, 600000); // Check every 10 minutes
+
+  // New: heartbeat checker (no data for 20 s → reconnect)
+  const heartbeatInterval = setInterval(() => {
+    if (Date.now() - lastHeartbeat > 20_000) {
+      console.warn(`[${new Date().toISOString()}] No heartbeat in 20s → reconnecting`);
+      // abort will trigger your reconnection logic
+      streamAbortController.abort();
+      clearInterval(heartbeatInterval);
+    }
+  }, 5000);
 
   // Create a fresh controller for this connection
   streamAbortController = new AbortController();
@@ -336,9 +385,16 @@ async function startStream() {
     signal: streamAbortController.signal
   });
 
+  // NEW: every time any chunk (tweet or heartbeat newline) arrives,
+  // update lastHeartbeat so we know the connection is still alive.
+  streamInstance.on('data', () => {
+    lastHeartbeat = Date.now();
+  });
+
   // Listen for the socket close so we null out our state immediately
   streamInstance.on('close', () => {
     console.log(`[${new Date().toISOString()}] Stream socket closed`);
+    clearInterval(heartbeatInterval);
     streamInstance = null;
     streamAbortController = null;
   });
@@ -360,6 +416,7 @@ async function startStream() {
   } finally {
     console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
     clearInterval(inactivityInterval);
+    clearInterval(heartbeatInterval);
 
     if (streamAbortController) {
       streamAbortController.abort();
@@ -375,6 +432,30 @@ async function startStreamSafe() {
     return;
   }
   streamStarting = true;
+
+  // ◆ Refresh client to honor DNS TTL & keep UA header fresh
+  twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN, {
+    requestOptions: {
+      headers: {
+        'User-Agent': 'kiosuku/1.0.0'
+      }
+    }
+  });
+
+  // Clean up any lingering stream before opening a new one
+  if (streamAbortController) {
+    console.log(`[${new Date().toISOString()}] Cleaning up previous stream before reconnecting.`);
+    streamAbortController.abort();
+    // some streams expose .destroy() instead of .close()
+    if (typeof streamInstance?.destroy === 'function') {
+      streamInstance.destroy();
+    } else if (typeof streamInstance?.close === 'function') {
+      streamInstance.close();
+    }
+    streamInstance = null;
+    streamAbortController = null;
+  }
+
   try {
     await startStream();
   } finally {
@@ -387,30 +468,36 @@ async function startStreamSafe() {
  * return the delay (ms) before the next reconnect.
  */
 function getNextDelay(error, attempts) {
+  // 1) Linear back-off for low-level network errors
+  if (error.code && ['ECONNRESET','ETIMEDOUT','ENOTFOUND','EAI_AGAIN'].includes(error.code)) {
+    // attempts*250ms, capped at 16s
+    return Math.min(attempts * 250, 16_000);
+  }
+
   const status = error.response?.status;
   const headers = error.response?.headers || {};
 
+  // 2) 429 → use X rate-limit-reset
   if (status === 429) {
-    // Respect x-rate-limit-reset
     const reset = parseInt(headers['x-rate-limit-reset'], 10);
     const nowSec = Math.floor(Date.now() / 1000);
     const waitSec = Math.max((reset || nowSec + 60) - nowSec, 60);
     return waitSec * 1000;
   }
 
+  // 3) 409 → exponential up to 30m
   if (status === 409) {
-    // Conflict → exponential up to 30 min
     return Math.min(1000 * Math.pow(2, attempts), 30 * 60 * 1000);
   }
 
+  // 4) 503 → 5m + jitter
   if (status === 503) {
-    // Service unavailable → 5 min + 0–2 min jitter
     const base = 5 * 60 * 1000;
     const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
     return base + jitter;
   }
 
-  // Default exponential backoff: 30 s × 2^(attempts−1), capped at 5 min
+  // 5) all other HTTP errors → exponential 30s×2^(n−1), capped at 5m
   const initial = 30 * 1000;
   const maxDelay = 5 * 60 * 1000;
   return Math.min(initial * Math.pow(2, attempts - 1), maxDelay);
@@ -444,6 +531,16 @@ async function runStream() {
     if (startError) {
       const now = new Date().toISOString();
       const status = startError.response?.status;
+
+      // Fail-fast on authentication errors
+      if (status === 401 || status === 403) {
+        console.error(
+          `[${now}] Authentication error (${status}). ` +
+          `Please verify your TWITTER_BEARER_TOKEN; exiting.`
+        );
+        process.exit(0); // Exit cleanly to prevent Railway from restarting (zero code 0 is needed)
+      }
+      
       console.error(
         `[${now}] Stream error (${status || startError.code || startError.name}): ${startError.message}`,
         startError,
@@ -458,14 +555,31 @@ async function runStream() {
       streamAbortController = null;
 
       // preserve your soft-rate-limit activation on 429
+      // new 429 handling: special‐case TooManyConnections
       if (status === 429) {
-        const headers = startError.response?.headers || {};
-        const reset = parseInt(headers['x-rate-limit-reset'], 10);
-        const nowSec = Math.floor(Date.now() / 1000);
-        const wait = Math.max((reset || nowSec + 60) - nowSec, 60);
+        const headers = startError.response.headers || {};
+        const resetSec = parseInt(headers['x-rate-limit-reset'], 10);
+        const nowSec  = Math.floor(Date.now() / 1000);
+        const waitSec = Math.max((resetSec || nowSec + 60) - nowSec, 60);
+
+        // Inspect Twitter’s JSON error payload
+        const body = startError.response.data || {};
+        const errorTitle = body.errors?.[0]?.title || body.title || '';
+
+        if (errorTitle.includes('Too Many Connections')) {
+          console.warn(
+            `[${now}] TooManyConnections: reached max stream connections.`
+            + ` Pausing ${waitSec}s until ${new Date(resetSec * 1000).toISOString()}`
+          );
+          await new Promise(r => setTimeout(r, waitSec * 1000));
+          continue;  // retry after reset window
+        }
+
+        // Fallback for other 429s → soft rate limit
         const backoffUntil = Date.now() + 15 * 60 * 1000;
         console.warn(
-          `[${now}] Twitter 429. Entering soft rate limit until ${new Date(backoffUntil).toISOString()}`
+          `[${now}] Twitter 429. Entering soft rate limit until `
+          + `${new Date(backoffUntil).toISOString()}`
         );
         if (!softRateLimit) {
           softRateLimit = true;
@@ -502,11 +616,18 @@ function shutdown() {
   console.log(`[${new Date().toISOString()}] Shutdown signal received`);
   if (streamAbortController) {
     streamAbortController.abort();
-  } else {
-    streamInstance?.destroy();
   }
+  if (streamInstance) {
+    if (typeof streamInstance.destroy === 'function') {
+      streamInstance.destroy();
+    } else {
+      streamInstance.close?.();
+    }
+  }
+  streamInstance = null;
+  streamAbortController = null;
   clearInterval(inactivityInterval);
-  process.exit(0);
+  process.exit(0); // Code 0 means Railway won't restart
 }
 
 process.on('SIGTERM', () => {
@@ -514,6 +635,7 @@ process.on('SIGTERM', () => {
   shutdown();
 });
 process.on('SIGINT', shutdown);
+
 process.on('uncaughtException', err => {
   console.error(`[${new Date().toISOString()}] Uncaught Exception:`, err);
 });
@@ -533,6 +655,9 @@ process.on('unhandledRejection', reason => {
     // never resolves, so nothing else runs
     await new Promise(() => {});
   }
+
+  // ← NEW: kill any orphaned TCP connections before we open a new one
+  killOldXConnections();
   
   console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
   await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
