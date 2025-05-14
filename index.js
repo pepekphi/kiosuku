@@ -589,6 +589,7 @@ async function runStream() {
       }
     }
   }
+}
 
 // Graceful shutdown
 function shutdown() {
