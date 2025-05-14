@@ -50,7 +50,7 @@ const { execSync } = require('child_process');
 function killOldXConnections() {
   try {
     const out = execSync(
-      `lsof -iTCP -sTCP:TIME_WAIT | grep 104.244.42.`
+      `lsof -iTCP -sTCP:TIME_WAIT 2>/dev/null | grep 104.244.42.`
     ).toString().trim();
     if (out) {
       console.log('[startup] lingering X.com sockets:\n', out);
@@ -365,10 +365,13 @@ async function startStream() {
 
   // New: heartbeat checker (no data for 20 s → reconnect)
   const heartbeatInterval = setInterval(() => {
+    // only run when we actually have an active stream
+    if (!streamInstance) return;
+
     if (Date.now() - lastHeartbeat > 20_000) {
       console.warn(`[${new Date().toISOString()}] No heartbeat in 20s → reconnecting`);
-      // abort will trigger your reconnection logic
-      streamAbortController.abort();
+      // safely abort if it exists
+      streamAbortController?.abort();
       clearInterval(heartbeatInterval);
     }
   }, 5000);
