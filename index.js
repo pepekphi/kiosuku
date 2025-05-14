@@ -500,9 +500,9 @@ function getNextDelay(error, attempts) {
     return base + jitter;
   }
 
-  // 5) all other HTTP errors → exponential 30s×2^(n−1), capped at 5m
+  // 5) all other HTTP errors → exponential 30s×2^(n−1), capped at 1h
   const initial = 30 * 1000;
-  const maxDelay = 5 * 60 * 1000;
+  const maxDelay = 60 * 60 * 1000;   // now 1 hour instead of 5 min
   return Math.min(initial * Math.pow(2, attempts - 1), maxDelay);
 }
 
@@ -557,61 +557,38 @@ async function runStream() {
       streamInstance = null;
       streamAbortController = null;
 
-      // preserve your soft-rate-limit activation on 429
-      // new 429 handling: special‐case TooManyConnections
+      // inside runStream’s catch(startError):
       if (status === 429) {
         const headers = startError.response.headers || {};
         const resetSec = parseInt(headers['x-rate-limit-reset'], 10);
         const nowSec  = Math.floor(Date.now() / 1000);
+        // ensure at least 60s if header is missing or in the past
         const waitSec = Math.max((resetSec || nowSec + 60) - nowSec, 60);
 
-        // Inspect Twitter’s JSON error payload
-        const body = startError.response.data || {};
-        const errorTitle = body.errors?.[0]?.title || body.title || '';
-
-        if (errorTitle.includes('Too Many Connections')) {
-          console.warn(
-            `[${now}] TooManyConnections: reached max stream connections.`
-            + ` Pausing ${waitSec}s until ${new Date(resetSec * 1000).toISOString()}`
-          );
-          await new Promise(r => setTimeout(r, waitSec * 1000));
-          continue;  // retry after reset window
-        }
-
-        // Fallback for other 429s → soft rate limit
-        const backoffUntil = Date.now() + 15 * 60 * 1000;
         console.warn(
-          `[${now}] Twitter 429. Entering soft rate limit until `
-          + `${new Date(backoffUntil).toISOString()}`
+          `[${now}] 429 from Twitter. `
+          + `Waiting ${waitSec}s until ${new Date(resetSec * 1000).toISOString()} before reconnect…`
         );
-        if (!softRateLimit) {
-          softRateLimit = true;
-          softRateLimitUntil = backoffUntil;
-          setTimeout(() => {
-            softRateLimit = false;
-            softRateLimitUntil = null;
-            console.log(`[${new Date().toISOString()}] Soft rate limit cleared.`);
-          }, 15 * 60 * 1000);
-        }
+        await new Promise(r => setTimeout(r, waitSec * 1000));
+        continue;  // skip any other backoff logic
       }
 
-      // centralized backoff for every error type
+      // (no more 429 fallback here—everything else still hits centralized backoff)
       const delayMs = getNextDelay(startError, attempts);
-      console.warn(`[${now}] Waiting ${delayMs / 1000}s before retrying...`);
+      console.warn(`[${now}] Waiting ${delayMs/1000}s before retrying…`);
       await new Promise(r => setTimeout(r, delayMs));
-    }
     
-    if (attempts >= maxAttempts) {
-      const now = new Date().toISOString();
-      console.error(`[${now}] Max attempts reached. Pausing 10m before next try (no full restart).`);
-      // long backoff instead of process.exit()
-      await new Promise(r => setTimeout(r, 10 * 60 * 1000));
-      attempts = 0;
-      console.log(`[${new Date().toISOString()}] Resuming stream attempts.`);
-      continue;
+      if (attempts >= maxAttempts) {
+        const now = new Date().toISOString();
+        console.error(`[${now}] Max attempts reached. Pausing 10m before next try (no full restart).`);
+        // long backoff instead of process.exit()
+        await new Promise(r => setTimeout(r, 10 * 60 * 1000));
+        attempts = 0;
+        console.log(`[${new Date().toISOString()}] Resuming stream attempts.`);
+        continue;
+      }
     }
   }
-}
 
 // Graceful shutdown
 function shutdown() {
