@@ -451,13 +451,11 @@ async function runStream() {
       }
 
       if (status === 503) {
-    const delay = reconnectDelay;
-  console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
-  await new Promise(r => setTimeout(r, delay));
-  reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
-  continue;
-}
-
+        const delay = reconnectDelay;
+        console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
+        await new Promise(r => setTimeout(r, delay));
+        reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+        continue;
       }
 
       if (startError.code === 'TooManyConnections') {
