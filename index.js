@@ -153,7 +153,7 @@ function getFullTweetText(tweet, includes) {
     }
   }
 
-  return text.replace(/\n/g, ' ');
+  return text.replace(/\n/g, ' ').replace(/&amp;/g, '&'); // replaces new line with space, and replaces &amp; with &
 }
 
 async function forwardTweet(tweet, includes) {
