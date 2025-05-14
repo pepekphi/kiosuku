@@ -500,9 +500,9 @@ function getNextDelay(error, attempts) {
     return base + jitter;
   }
 
-  // 5) all other HTTP errors → exponential 30s×2^(n−1), capped at 1h
-  const initial = 30 * 1000;
-  const maxDelay = 60 * 60 * 1000;   // now 1 hour instead of 5 min
+  // 5) all other HTTP errors → exponential 60s×2^(n−1), capped at 1h
+  const initial = 60 * 1000;         // first retry is now 1 minute
+  const maxDelay = 60 * 60 * 1000;   // cap at 1 hour
   return Math.min(initial * Math.pow(2, attempts - 1), maxDelay);
 }
 
