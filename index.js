@@ -2,6 +2,7 @@
 const INACTIVITY_TIMEOUT = 120 * 60 * 1000; // 2 hours
 const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
+const THREAD_EXPIRATION_MS = 1 * 60 * 1000; // 1 minute
 
 // Dependencies
 const axios = require('axios');
@@ -76,28 +77,6 @@ http.createServer((req, res) => {
   console.log(`[${new Date().toISOString()}] Health check server running on port 8080`);
 });
 
-// Memory logging
-/*
-setInterval(() => {
-  const mem = (process.memoryUsage().rss / 1024 / 1024).toFixed(2);
-  console.log(`[${new Date().toISOString()}] Memory: ${mem} MB | Buffers: ${threadBuffers.size}`);
-}, 300000);
-*/
-
-// Thread buffer expiration
-setInterval(() => {
-  const now = Date.now();
-  for (const [convId, buf] of threadBuffers) {
-    const firstTweetTime = buf?.tweets?.[0]?.tweet?.created_at;
-    if (!firstTweetTime) continue;
-    const ageMs = now - new Date(firstTweetTime).getTime();
-    if (ageMs > 4 * 60 * 60 * 1000) { // 4 hours
-      console.warn(`[${new Date().toISOString()}] Expiring old thread buffer: ${convId}`);
-      threadBuffers.delete(convId);
-    }
-  }
-}, 3600000); // Every 1 hour
-
 // Helper: select prioritized media and extract fields
 function getMediaInfo(tweet, includes) {
   const mediaKeys = tweet.attachments?.media_keys || [];
@@ -118,6 +97,31 @@ function getMediaInfo(tweet, includes) {
 function forceFullRestart() {
   console.log(`[${new Date().toISOString()}] Forcing container restart`);
   process.exit(1);
+}
+
+function storeTweet(data, retryCount = 0) {
+  supabase
+    .from('posts')
+    .insert([ data ])
+    .then(({ error }) => {
+      if (error) {
+        console.error(
+          `[${new Date().toISOString()}] Supabase insert error for post ${data.post_id}: ${error.message}`
+        );
+        if (retryCount < 3) {
+          const delay = (retryCount + 1) * 2000; // exponential back-off
+          console.log(
+            `[${new Date().toISOString()}] Retrying insert for post ${data.post_id} in ${delay}ms (attempt ${retryCount + 1})`
+          );
+          setTimeout(() => storeTweet(data, retryCount + 1), delay);
+        }
+      }
+    })
+    .catch(err => {
+      console.error(
+        `[${new Date().toISOString()}] Supabase insert exception for post ${data.post_id}: ${err.message}`
+      );
+    });
 }
 
 function getFullTweetText(tweet, includes) {
@@ -204,12 +208,7 @@ async function forwardTweet(tweet, includes) {
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
 
-  supabase.from('posts').insert([ insertData ])
-    .then(({ error }) => {
-      if (error) {
-        console.error(`[${new Date().toISOString()}] Supabase error: ${error.message}`);
-      }
-    });
+  storeTweet(insertData); // Supabase write
 
   axios.post(WEBHOOK_URL, payload)
     .then(() => {
@@ -221,7 +220,8 @@ async function forwardTweet(tweet, includes) {
 async function flushThread(conversationId) {
   const buf = threadBuffers.get(conversationId);
   if (!buf) return;
-  clearTimeout(buf.timeout);
+  clearTimeout(buf.flushTimeout);
+  clearTimeout(buf.expireTimeout);
 
   buf.tweets.sort((a, b) => BigInt(a.tweet.id) < BigInt(b.tweet.id) ? -1 : 1);
   const merged = buf.tweets.map(({ tweet, includes }) => getFullTweetText(tweet, includes)).join(' ');
@@ -267,14 +267,8 @@ async function flushThread(conversationId) {
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
 
-  supabase.from('posts').insert([ insertData ])
-    .then(({ error }) => {
-      if (error) {
-        console.error(`[${new Date().toISOString()}] Supabase thread error: ${error.message}`);
-      } else {
-        console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
-      }
-    });
+  storeTweet(insertData); // Supabase db write
+  console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
 
   axios.post(WEBHOOK_URL, payload)
     // .then(() => console.log(`[${new Date().toISOString()}] Thread webhook OK for ${conversationId}`))
@@ -288,24 +282,31 @@ function handleTweet(tweet, includes) {
   const isRoot = convId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
   const isThreadOpener = /(?:[01]\.(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|\bbelow\b)/i.test(text);
-
-  if (threadBuffers.has(convId)) { // Already buffering this conversation → append
+  
+  if (threadBuffers.has(convId)) {
     const buf = threadBuffers.get(convId);
     buf.tweets.push({ tweet, includes });
+
     if (buf.tweets.length >= MAX_TWEETS_PER_THREAD) {
-      // console.warn(`[${new Date().toISOString()}] Thread ${convId} exceeded max. Flushing.`);
       flushThread(convId);
       return;
     }
-    clearTimeout(buf.timeout);
-    buf.timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
-  } else if (isRoot && isThreadOpener) { // First tweet of a detected thread → start buffering
-    
-    const timeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
-    threadBuffers.set(convId, { tweets: [{ tweet, includes }], timeout });
-  } else if (!isRoot) { // Non-root tweet not part of a buffered thread → drop
-    // console.log(`[${new Date().toISOString()}] Skipping non-root tweet ${tweet.id} not in thread buffer`);
-    return;
+    clearTimeout(buf.flushTimeout);
+    buf.flushTimeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
+  } else if (isRoot && isThreadOpener) {
+    const flushTimeout = setTimeout(() => flushThread(convId), WAIT_FOR_THREAD_MS);
+    const expireTimeout = setTimeout(() => {
+      console.warn(`[${new Date().toISOString()}] Expiring old thread buffer: ${convId}`);
+      clearTimeout(flushTimeout);
+      clearTimeout(expireTimeout);
+      threadBuffers.delete(convId);
+    }, THREAD_EXPIRATION_MS);
+
+    threadBuffers.set(convId, {
+      tweets: [{ tweet, includes }],
+      flushTimeout,
+      expireTimeout
+    });
   } else {
     forwardTweet(tweet, includes); // Root tweet that isn’t thread-opener → treat as standalone
   }
@@ -341,11 +342,16 @@ async function startStream() {
       lastTweetTime = Date.now();
       const userLog = includes?.users?.[0]?.username ?? 'unknown';
       console.log(`[${new Date().toISOString()}] Tweet ${data.id} from @${userLog}`);
-      try {
-        handleTweet(data, includes);
-      } catch (err) {
-        console.error(`[${new Date().toISOString()}] Error inside stream loop:`, err, err.stack);
-      }
+      setImmediate(() => {
+        try {
+          handleTweet(data, includes);
+        } catch (err) {
+          console.error(
+            `[${new Date().toISOString()}] Error processing tweet ${data.id}:`,
+            err, err.stack
+          );
+        }
+      });
     }
   } finally {
     console.warn(`[${new Date().toISOString()}] Stream ended. Cleaning up.`);
@@ -375,6 +381,13 @@ async function runStream() {
   const maxAttempts = 10;
 
   while (!isShuttingDown && attempts < maxAttempts) {
+    // Destroy previous stream before attempting to reconnect
+    if (streamInstance) {
+      console.log(`[${new Date().toISOString()}] Destroying previous stream before reconnecting.`);
+      streamInstance.destroy();
+      streamInstance = null;
+    }
+    
     // 💡 Soft rate limit mode - throttle retries for 15 min
     if (softRateLimit) {
       const remaining = softRateLimitUntil ? ((softRateLimitUntil - Date.now()) / 1000).toFixed(0) : 'unknown';
@@ -438,12 +451,13 @@ async function runStream() {
       }
 
       if (status === 503) {
-        const base = 5 * 60 * 1000;
-        const jitter = Math.floor(Math.random() * 2 * 60 * 1000);
-        const delay = base + jitter;
-        console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
-        await new Promise(r => setTimeout(r, delay));
-        continue;
+    const delay = reconnectDelay;
+  console.warn(`[${now}] Twitter 503 Unavailable. Sleeping ${(delay / 1000).toFixed(0)}s before retrying.`);
+  await new Promise(r => setTimeout(r, delay));
+  reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
+  continue;
+}
+
       }
 
       if (startError.code === 'TooManyConnections') {
