@@ -623,11 +623,6 @@ process.on('unhandledRejection', reason => {
   console.error(`[${new Date().toISOString()}] Unhandled Rejection:`, reason);
 });
 
-// 💓 Keep-alive heartbeat
-// setInterval(() => {
-  // console.log(`[${new Date().toISOString()}] Heartbeat: alive | Last tweet seen at ${new Date(lastTweetTime).toISOString()}`);
-// }, 60 * 60 * 1000); // 1 hour
-
 // 🆕 Boot delay + run loop
 (async () => {
   if (PAUSE_MODE) {
