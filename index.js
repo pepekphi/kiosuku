@@ -23,7 +23,7 @@ let twitterClient = new TwitterApi(TWITTER_BEARER_TOKEN, {
   requestOptions: {
     headers: {
       // identify your app version in every request
-      'User-Agent': 'kiosuku/1.0.0'
+      'User-Agent': 'kiosuku2/2.0.0'
     }
   }
 });
