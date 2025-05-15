@@ -143,8 +143,8 @@ function getFullTweetText(tweet, includes) {
       });
       const user = includes.users.find(u => u.id === refTweet.author_id);
       const handle = user?.username || 'unknown';
-      if (ref.type === 'quoted') text += ` [quoted @${handle}]${refText}[/quoted]`;
-      if (ref.type === 'retweeted') text = `RT @${handle} ${refText}`;
+      if (ref.type === 'quoted') text += ` — @${handle} posted: ${refText}`;
+      if (ref.type === 'retweeted') text = `@${handle} posted: ${refText}`;
     });
   }
 
