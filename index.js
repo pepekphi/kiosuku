@@ -170,7 +170,7 @@ async function forwardTweet(tweet, includes) {
   const username = user?.username ?? 'unknown';
   const text = getFullTweetText(tweet, includes);
   if (text.trim().startsWith('@')) {
-    // console.log(`[${new Date().toISOString()}] Skipping @ tweet ${tweet.id}`);
+    console.log(`[${new Date().toISOString()}] Skipping @ tweet ${tweet.id} -- disable this log again`);
     return;
   }
 
