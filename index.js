@@ -169,8 +169,8 @@ async function forwardTweet(tweet, includes) {
   const user = includes.users.find(u => u.id === tweet.author_id);
   const username = user?.username ?? 'unknown';
   const text = getFullTweetText(tweet, includes);
-  if (text.trim().startsWith('@')) {
-    console.log(`[${new Date().toISOString()}] Skipping @ tweet ${tweet.id} -- disable this log again`);
+  if (text.trim().startsWith('@') && !/^@\S+\s+posted:\s*/.test(text.trim())) { // The last part makes sure the text doesn't start with "@someone posted: "
+    console.log(`[${new Date().toISOString()}] Skipping non-retweet @ tweet ${tweet.id}`);
     return;
   }
 
