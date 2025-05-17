@@ -158,11 +158,12 @@ function getFullTweetText(tweet, includes) {
     }
   }
 
-  // Removes http/https links and pic.x.com links along with preceding spaces, replaces new line with space, and replaces &amp; with &
+  // Removes http/https links and pic.x.com links along with preceding spaces, replaces new line with space, replaces &amp; with &, and finally turns any succession of multiple spaces into 1 space max.
   return text
     .replace(/ ?(?:https?:\/\/\S+|pic\.x\.com\/\S+)/g, '')
     .replace(/\n/g, ' ')
-    .replace(/&amp;/g, '&');
+    .replace(/&amp;/g, '&')
+    .replace(/ {2,}/g, ' ');
 }
 
 async function forwardTweet(tweet, includes) {
