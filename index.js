@@ -35,7 +35,7 @@ let softRateLimitUntil = null;
 let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
-const THREAD_OPENER_REGEX = /(?:[01]\.(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|\bbelow\b)/i;
+const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|\bbelow\b)/i;
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
@@ -292,7 +292,7 @@ function handleTweet(tweet, includes) {
   const isRoot = convId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
   const isThreadOpener = THREAD_OPENER_REGEX.test(text);
-  
+    
   if (threadBuffers.has(convId)) {
     const buf = threadBuffers.get(convId);
     buf.tweets.push({ tweet, includes });
@@ -317,6 +317,8 @@ function handleTweet(tweet, includes) {
       flushTimeout,
       expireTimeout
     });
+  } else if (!isRoot && !threadBuffers.has(convId)) { // Skip any non-root tweet that isn't part of an existing thread buffer (basically skipping replies)
+    return;
   } else {
     forwardTweet(tweet, includes); // Root tweet that isn’t thread-opener → treat as standalone
   }
