@@ -35,6 +35,7 @@ let softRateLimitUntil = null;
 let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
+const THREAD_OPENER_REGEX = /(?:[01]\.(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|\bbelow\b)/i;
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
@@ -207,6 +208,9 @@ async function forwardTweet(tweet, includes) {
   if (expandedUrl) insertData.page_url = expandedUrl; // Only if it is not ""
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
+  
+  const type = getTweetType(tweet, 0);
+  if (type) insertData.type = type;
 
   storeTweet(insertData); // Supabase write
 
@@ -241,8 +245,8 @@ async function flushThread(conversationId) {
     expandedUrl = pick.reduce((a, b) => b.expanded_url.length > a.expanded_url.length ? b : a).expanded_url;
   }
 
-  const isThread = buf.tweets.length > 1;
-
+  //const isThread = buf.tweets.length > 1;
+    
   const payload = {
     timestamp: first.tweet.created_at,
     username: name,
@@ -251,7 +255,7 @@ async function flushThread(conversationId) {
     tweetText: merged,
     tweetExpandedURL: expandedUrl
   };
-
+  
   const { mediaText, mediaUrl } = getMediaInfo(first.tweet, first.includes);
 
   const insertData = {
@@ -260,12 +264,14 @@ async function flushThread(conversationId) {
     fetch_timestamp: new Date().toISOString(),
     account: name,
     // conversation_id: conversationId,
-    post_text: merged,
-    is_thread: isThread
+    post_text: merged
   };
   if (expandedUrl) insertData.page_url = expandedUrl; // Only if it is not ""
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
+
+  const type = getTweetType(first.tweet, buf.tweets.length);
+  if (type) insertData.type = type;
 
   storeTweet(insertData); // Supabase db write
   console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
@@ -281,7 +287,7 @@ function handleTweet(tweet, includes) {
   const convId = tweet.conversation_id;
   const isRoot = convId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
-  const isThreadOpener = /(?:[01]\.(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|\bbelow\b)/i.test(text);
+  const isThreadOpener = THREAD_OPENER_REGEX.test(text);
   
   if (threadBuffers.has(convId)) {
     const buf = threadBuffers.get(convId);
@@ -474,6 +480,26 @@ async function runStream() {
       forceFullRestart();
     }
   }
+}
+
+function getTweetType(tweet, bufLength = 0) {
+  // 1) Quote/Repost/Reply
+  if (tweet.referenced_tweets) {
+    const types = tweet.referenced_tweets.map(r => r.type);
+    if (types.includes('retweeted'))   return 'Repost';
+    if (types.includes('quoted'))      return 'Quote';
+    if (types.includes('replied_to'))  return 'Reply';
+  }
+
+  // 2) Thread vs failed opener
+  const text = tweet.note_tweet?.text || tweet.text;
+  const isOpener = THREAD_OPENER_REGEX.test(text);
+  if (isOpener) {
+    return bufLength > 1 ? 'Thread' : 'Post*';
+  }
+
+  // 3) Default → Post (omit to let DB default)
+  return undefined;
 }
 
 // Graceful shutdown
