@@ -149,7 +149,7 @@ function getFullTweetText(tweet, includes) {
     });
   }
 
-  // NEW: Append article title and preview_text if present
+  // Append article title and preview_text if present
   if (tweet.article) {
     const title = tweet.article.title || '';
     const preview = tweet.article.preview_text || '';
