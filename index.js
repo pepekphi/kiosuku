@@ -12,7 +12,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { maintenance24h: maintenance24h } = require('./maintenance24h');
 const { maintenance3h: maintenance3h } = require('./maintenance3h');
 
-// Environment variables
+// Environment vars
 const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
