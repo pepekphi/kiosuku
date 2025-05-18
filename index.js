@@ -490,22 +490,44 @@ async function runStream() {
 }
 
 function getTweetType(tweet, bufLength = 0) {
-  // 1) Quote/Repost/Reply
-  if (tweet.referenced_tweets) {
-    const types = tweet.referenced_tweets.map(r => r.type);
-    if (types.includes('retweeted'))   return 'Repost';
-    if (types.includes('quoted'))      return 'Quote';
-    if (types.includes('replied_to'))  return 'Reply';
+  const refs      = tweet.referenced_tweets?.map(r => r.type) || [];
+  const isRetweet = refs.includes('retweeted');
+  const isQuote   = refs.includes('quoted');
+  const isReply   = refs.includes('replied_to');
+  const text      = tweet.note_tweet?.text || tweet.text;
+  const isOpener  = THREAD_OPENER_REGEX.test(text);
+
+  // 1) A tweet that is both a quote and a reply
+  if (isQuote && isReply) {
+    return 'Quote reply';
   }
 
-  // 2) Thread vs failed opener
-  const text = tweet.note_tweet?.text || tweet.text;
-  const isOpener = THREAD_OPENER_REGEX.test(text);
+  // 2) Pure retweet
+  if (isRetweet) {
+    return 'Repost';
+  }
+
+  // 3) Quoted thread (or failed quoted opener)
+  if (isQuote && isOpener) {
+    return bufLength > 1 ? 'Quote thread' : 'Quote*';
+  }
+
+  // 4) Standalone quote
+  if (isQuote) {
+    return 'Quote';
+  }
+
+  // 5) Standalone reply
+  if (isReply) {
+    return 'Reply';
+  }
+
+  // 6) Non-quoted thread vs failed opener
   if (isOpener) {
     return bufLength > 1 ? 'Thread' : 'Post*';
   }
 
-  // 3) Default → Post (omit to let DB default)
+  // 7) Default → let DB default to Post
   return undefined;
 }
 
