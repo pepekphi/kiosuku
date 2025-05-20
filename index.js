@@ -490,6 +490,11 @@ async function runStream() {
 }
 
 function getTweetType(tweet, bufLength = 0) {
+  // 0) Article override
+  if (tweet.article) {
+    return 'Article';
+  }
+  
   const refs      = tweet.referenced_tweets?.map(r => r.type) || [];
   const isRetweet = refs.includes('retweeted');
   const isQuote   = refs.includes('quoted');
