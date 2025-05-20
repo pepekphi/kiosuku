@@ -150,7 +150,7 @@ function getFullTweetText(tweet, includes) {
   }
 
   // Append article title and preview_text if present
-  if (tweet.article) {
+  if (tweet.article && Object.keys(tweet.article).length > 0) {
     const title = tweet.article.title || '';
     const preview = tweet.article.preview_text || '';
     if (title || preview) {
@@ -491,7 +491,7 @@ async function runStream() {
 
 function getTweetType(tweet, bufLength = 0) {
   // 0) Article override
-  if (tweet.article) {
+  if (tweet.article && Object.keys(tweet.article).length > 0) {
     return 'Article';
   }
   
