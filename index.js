@@ -103,7 +103,7 @@ function forceFullRestart() {
 }
 
 function storeTweet(data, retryCount = 0) {
-  const insertPromise = supabase
+  supabase
     .from('posts')
     .insert([ data ])
     .then(({ error }) => {
@@ -125,8 +125,6 @@ function storeTweet(data, retryCount = 0) {
         `[${new Date().toISOString()}] Supabase insert exception for post ${data.post_id}: ${err.message}`
       );
     });
-
-  return insertPromise;
 }
 
 function getFullTweetText(tweet, includes) {
@@ -221,31 +219,13 @@ async function forwardTweet(tweet, includes) {
   const type = getTweetType(tweet, 0);
   if (type) insertData.type = type;
 
-  // Measure Supabase send
-  const supStart = Date.now();
-  const supPromise = storeTweet(insertData);
+  storeTweet(insertData); // Supabase write
 
-  // Measure webhook send
-  const webStart = Date.now();
-  const webPromise = axios.post(WEBHOOK_URL, payload);
-
-  // Once both are settled, log durations in seconds (1 decimal)
-  Promise.allSettled([supPromise, webPromise])
+  axios.post(WEBHOOK_URL, payload)
     .then(() => {
-      const supDuration = ((Date.now() - supStart) / 1000).toFixed(1);
-      const webDuration = ((Date.now() - webStart) / 1000).toFixed(1);
-      console.log(
-        `[${new Date().toISOString()}] Tweet ${tweet.id} from @${username} | Supabase: ${supDuration}s | Webhook: ${webDuration}s`
-      );
-    });
-
-  // Preserve original error handling for webhook
-  webPromise.catch(err => {
-    console.error(
-      `[${new Date().toISOString()}] Webhook error:`,
-      err.response?.data || err.message
-    );
-  });
+      // console.log(`[${new Date().toISOString()}] Webhook OK for tweet ${tweet.id}`);
+    })
+    .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
 }
 
 async function flushThread(conversationId) {
@@ -300,31 +280,12 @@ async function flushThread(conversationId) {
   const type = getTweetType(first.tweet, buf.tweets.length);
   if (type) insertData.type = type;
 
-  // Measure Supabase send
-  const supStart = Date.now();
-  const supPromise = storeTweet(insertData);
+  storeTweet(insertData); // Supabase db write
+  console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
 
-  // Measure webhook send
-  const webStart = Date.now();
-  const webPromise = axios.post(WEBHOOK_URL, payload);
-
-  // Once both are settled, log durations
-  Promise.allSettled([supPromise, webPromise])
-    .then(() => {
-      const supDuration = ((Date.now() - supStart) / 1000).toFixed(1);
-      const webDuration = ((Date.now() - webStart) / 1000).toFixed(1);
-      console.log(
-        `[${new Date().toISOString()}] Thread ${conversationId} from @${name} | Supabase: ${supDuration}s | Webhook: ${webDuration}s`
-      );
-    });
-
-  // Preserve original thread‐webhook error handling
-  webPromise.catch(err => {
-    console.error(
-      `[${new Date().toISOString()}] Thread webhook error:`,
-      err.message
-    );
-  });
+  axios.post(WEBHOOK_URL, payload)
+    // .then(() => console.log(`[${new Date().toISOString()}] Thread webhook OK for ${conversationId}`))
+    .catch(err => console.error(`[${new Date().toISOString()}] Thread webhook error:`, err.message));
 
   threadBuffers.delete(conversationId);
 }
