@@ -85,8 +85,8 @@ const FORWARD_FILTERS = {
     /ve been hacked/i,
     /ve been compromised/i,
     /ve been exploited/i,
-    /(?=.*(?:binance|bybit|coinbase|upbit|okx|bithumb|bitget))(?:lists|listed|added to|addition|listing|will list|to list|activate|launch|will add|expanded|suspen|delist|remov|to add|will support|to support)/i,
-    /(?=.*etf)(?:appli|apply| file|submit|filing|register|approv|grant|cleared|greenlight|award|amend|submit updated|s-1 form|reject|denied|denies)/i,
+    /(?=.*(binance|bybit|coinbase|upbit|okx|bithumb|bitget))(?=.*(lists|listed|added to|addition|listing|will list|to list|activate|launch|will add|expanded|suspen|delist|remov|to add|will support|to support))/i,
+    /(?=.*etf)(?=.*(appli|apply|file|submit|filing|register|approv|grant|cleared|greenlight|award|amend|submit updated|s-1 form|reject|denied|denies))/i,
     /investment warning/i,
     /precautionary alert/i
   ],
