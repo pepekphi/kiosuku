@@ -142,6 +142,7 @@ const FORWARD_FILTERS = {
     /subscribe now/i,
     / amid /i,
     /apply now/i,
+    /has surged over/i,
     /available to claim/i,
     /brought to you by/i,
     /apply here/i,
