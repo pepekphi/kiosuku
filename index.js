@@ -6,6 +6,196 @@ const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
 const THREAD_EXPIRATION_MS = 1 * 60 * 1000; // 1 minute
 
+// Forwarding rules block START, also remove this "if (shouldForward(" 2 times if I decide to remove this block
+const FORWARD_FILTERS = {
+  green150: [
+    /to announce/i,
+    /we announce/i,
+    /great news/i,
+    /launching/i,
+    /launched/i,
+    /we've made/i,
+    /we've done/i,
+    /debuting/i,
+    /proud to/i,
+    /pleased to/i,
+    /is here/i,
+    /excited to share/i,
+    /is coming to/i,
+    /is coming soon to/i,
+    /arrives on/i,
+    /upgrade incoming/i,
+    /is now live/i,
+    /is live/i,
+    /announcing/i,
+    /announced/i,
+    /announces/i,
+    /launches/i,
+    /to launch/i,
+    /will launch/i,
+    /introducing/i,
+    /introduces/i,
+    /is set to/i,
+    /are set to/i,
+    /to introduce/i,
+    /releases/i,
+    /have released/i,
+    /has released/i,
+    /kicks off/i,
+    /unveil/i,
+    /added to the roadmap/i,
+    /passes/i,
+    /upgrade:/i,
+    /core pce/i,
+    /partners with/i,
+    /is partnering/i,
+    /update:/i,    
+    /update -/i,
+    /update —/i,
+    /updates:/i,
+    /updates -/i,
+    /updates —/i,
+    /ism services/i,
+    /big news/i,    
+    /exciting news/i,
+    /starting today/i,
+    /has now/i,
+    /have now/i,
+    /is now/i,
+    /are now/i,
+    /can now be/i,    
+    /now supports/i,
+    /will add support for/i,
+    /has received/i,
+    /receives/i,
+    /are live/i,
+    /just got/i,
+    /just made/i,    
+    /has\s+\w+ed\b/i,
+    /have\s+\w+ed\b/i,
+    /we've\s+\w+ed\b/i,
+    /\bjust\s+\w+ed\b/i,
+    /\bwe're\s+\w+ing\b/i,
+    /\bis\s+\w+ing\b/i,
+    /\bare\s+\w+ing\b/i,
+    /\bhas been\s+\w+ed\b/i,
+    /s been hacked/i,
+    /s been compromised/i,
+    /s been exploited/i,
+    /ve been hacked/i,
+    /ve been compromised/i,
+    /ve been exploited/i,
+    /(?=.*(?:binance|bybit|coinbase|upbit|okx|bithumb|bitget))(?:lists|listed|added to|addition|listing|will list|to list|activate|launch|will add|expanded|suspen|delist|remov|to add|will support|to support)/i,
+    /(?=.*etf)(?:appli|apply| file|submit|filing|register|approv|grant|cleared|greenlight|award|amend|submit updated|s-1 form|reject|denied|denies)/i,
+    /investment warning/i,
+    /precautionary alert/i
+  ],
+  green20: [
+    /^(?=.{0,20})just in/i,
+    /^(?=.{0,20})breaking/i,
+    /^(?=.{0,20})presenting/i,
+    /^(?=.{0,20})announcement/i,
+    /^(?=.{0,20})intel:/i,
+    /^(?=.{0,20})today/i,
+    /^(?=.{0,20})now:/i,
+    /^(?=.{0,20})new:/i,
+    /^(?=.{0,20})latest/i,
+    /^(?=.{0,20})that was quick/i
+  ],
+  green10: [
+    /^(?=.{0,10})alert/i,
+    /^(?=.{0,10})scoop/i,
+    /^(?=.{0,10})new/i,
+    /^(?=.{0,10})🚨/
+  ],
+  greenAllCaps: /^[^a-z]*[A-Z][^a-z]*$/,
+  redStart: [
+    /^insight/i,
+    /^join us /i,
+    /^a research /i,
+    /^opinion/i,
+    /^analysis/i,
+    /^be a part of/i,
+    /^be part of/i
+  ],
+  red260: [
+    /community call/i,
+    /recap /i,
+    /contest/i,
+    /hackathon/i,
+    /sparks hope/i,
+    /sparks fear/i,
+    / booth/i,
+    /reportedly/i,
+    /register now/i,
+    /will donate/i,
+    /all-time high/i,
+    /happened so far/i,
+    /on mobile is now live/i,
+    /is now live on mobile/i,
+    /join us live/i,
+    /weekly progress update/i,
+    /weekly update/i,
+    /binance square/i,
+    /earlier this week/i,
+    /last week/i,
+    /subscribe now/i,
+    / amid /i,
+    /apply now/i,
+    /available to claim/i,
+    /brought to you by/i,
+    /apply here/i,
+    /just bought/i,
+    /just purchased/i,
+    /just sold/i,
+    /a whale bought/i,
+    /a whale sold/i,
+    /surges after/i,
+    /weekly surge/i,
+    /hashrate h/i,
+    / minted /i,
+    /april fool/i,
+    /now claimable/i,
+    /activity cools/i,
+    /airdrop/i,
+    /coindesk daily/i,
+    /will be speaking/i,
+    /town hall/i,
+    /nubank/i,
+    /exolix/i,
+    /bitmart/i,
+    /surges\s+\d+(\.\d+)?%/i
+  ],
+  redCaseSensitive: [
+    / AMA /,
+    /RESEARCH: /,
+    /INSIGHT: /,
+    / AMA's /,
+    / AMAs /
+  ]
+};
+
+function shouldForward(text) {
+  const snippet150 = text.slice(0, 150);
+  const snippet260 = text.slice(0, 260);
+  const snippet20  = text.slice(0, 20);
+  const snippet10  = text.slice(0, 10);
+  let green = false;
+
+  if (FORWARD_FILTERS.green150.some(rx => rx.test(snippet150))) green = true;
+  if (!green && FORWARD_FILTERS.green20.some(rx => rx.test(snippet20))) green = true;
+  if (!green && FORWARD_FILTERS.green10.some(rx => rx.test(snippet10))) green = true;
+  if (!green && FORWARD_FILTERS.greenAllCaps.test(text)) green = true;
+
+  const hasRed =
+    FORWARD_FILTERS.redStart.some(rx => rx.test(text)) ||
+    FORWARD_FILTERS.red260.some(rx => rx.test(snippet260)) ||
+    FORWARD_FILTERS.redCaseSensitive.some(rx => rx.test(snippet260));
+
+  return green && !hasRed;
+}
+// End of block
+
 // Dependencies
 const axios = require('axios');
 const http = require('http');
@@ -221,11 +411,10 @@ async function forwardTweet(tweet, includes) {
 
   storeTweet(insertData); // Supabase write
 
-  axios.post(WEBHOOK_URL, payload)
-    .then(() => {
-      // console.log(`[${new Date().toISOString()}] Webhook OK for tweet ${tweet.id}`);
-    })
-    .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
+  if (shouldForward(text)) {
+    axios.post(WEBHOOK_URL, payload)
+      .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
+  }
 }
 
 async function flushThread(conversationId) {
@@ -283,9 +472,10 @@ async function flushThread(conversationId) {
   storeTweet(insertData); // Supabase db write
   console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
 
-  axios.post(WEBHOOK_URL, payload)
-    // .then(() => console.log(`[${new Date().toISOString()}] Thread webhook OK for ${conversationId}`))
-    .catch(err => console.error(`[${new Date().toISOString()}] Thread webhook error:`, err.message));
+  if (shouldForward(merged)) {
+    axios.post(WEBHOOK_URL, payload)
+      .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
+  }
 
   threadBuffers.delete(conversationId);
 }
