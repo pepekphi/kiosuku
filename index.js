@@ -126,7 +126,6 @@ const FORWARD_FILTERS = {
     /sparks hope/i,
     /sparks fear/i,
     / booth/i,
-    /reportedly/i,
     /register now/i,
     /will donate/i,
     /all-time high/i,
