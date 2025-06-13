@@ -69,6 +69,8 @@ const FORWARD_FILTERS = {
     /has received/i,
     /receives/i,
     /are live/i,
+    /gone live/i,
+    /will go live/i,
     /just got/i,
     /just made/i,    
     /has\s+\w+ed\b/i,
