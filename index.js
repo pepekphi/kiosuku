@@ -20,6 +20,8 @@ const FORWARD_FILTERS = {
     /exploit/i,
     /hack/i,
     /compromise/i,
+    /is out now/i,
+    /is out!/i,
     /debuting/i,
     /proud to/i,
     /pleased to/i,
