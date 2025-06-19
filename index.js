@@ -26,6 +26,7 @@ const FORWARD_FILTERS = {
     /proud to/i,
     /pleased to/i,
     /is here/i,
+    /are here/i,
     /excited to share/i,
     /is coming to/i,
     /is coming soon to/i,
