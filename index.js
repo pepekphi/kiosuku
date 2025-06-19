@@ -207,6 +207,7 @@ function shouldForward(text) {
 // Dependencies
 const axios = require('axios');
 const http = require('http');
+const he = require('he');
 const { TwitterApi } = require('twitter-api-v2');
 const { createClient } = require('@supabase/supabase-js');
 const { maintenance24h: maintenance24h } = require('./maintenance24h');
@@ -327,6 +328,7 @@ function storeTweet(data, retryCount = 0) {
 
 function getFullTweetText(tweet, includes) {
   let text = tweet.note_tweet?.text ?? tweet.text;
+  text = he.decode(text); // Decode *all* HTML entities (&amp;, &lt;, &gt;, &quot;, &#39;, etc.)
   (tweet.entities?.urls || []).forEach(({ url, display_url }) => {
     if (!display_url.includes('…')) {
       text = text.replace(url, display_url);
@@ -339,6 +341,7 @@ function getFullTweetText(tweet, includes) {
       const refTweet = includes.tweets.find(t => t.id === ref.id);
       if (!refTweet) return;
       let refText = refTweet.note_tweet?.text ?? refTweet.text;
+      refText = he.decode(refText); // Decode any entities in the referenced text
       (refTweet.entities?.urls || []).forEach(({ url, display_url }) => {
         if (!display_url.includes('…')) refText = refText.replace(url, display_url);
       });
@@ -362,7 +365,6 @@ function getFullTweetText(tweet, includes) {
   return text
     .replace(/ ?(?:https?:\/\/(?!\S*\/status\/)\S+|pic\.x\.com\/\S+)/g, '')
     .replace(/\n/g, ' ')
-    .replace(/&amp;/g, '&')
     .replace(/ {2,}/g, ' ');
 }
 
