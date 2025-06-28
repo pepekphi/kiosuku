@@ -254,7 +254,7 @@ http.createServer((req, res) => {
       buffers: threadBuffers.size,
       lastTweet: new Date(lastTweetTime).toISOString(),
     }));
-  } else if (req.url === '/maintenance24h') { // For me or the cron job to trigger maintenance24h with server URL
+  } else if (req.url === '/maintenance24h') {
     maintenance24h(supabase)
       .then(() => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -264,7 +264,7 @@ http.createServer((req, res) => {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end(`Error triggering maintenance24h: ${err.message}\n`);
       });
-  } else if (req.url === '/maintenance3h') { // For me or the cron job to trigger maintenance3h with server URL
+  } else if (req.url === '/maintenance3h') {
     maintenance3h(supabase)
       .then(() => {
         res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -274,12 +274,54 @@ http.createServer((req, res) => {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end(`Error triggering maintenance3h: ${err.message}\n`);
       });
+  } else if (req.url === '/incoming' && req.method === 'POST') {
+    // ← new inbound‐webhook endpoint
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const {
+          timestamp = new Date().toISOString(),
+          xId,
+          conversationId,
+          tweetId,
+          text
+        } = JSON.parse(body);
+
+        // construct a “fake” tweet
+        const tweet = {
+          id:            tweetId.toString(),
+          author_id:     xId.toString(),
+          conversation_id: conversationId.toString(),
+          created_at:    timestamp,
+          text
+        };
+        // minimal includes block so forwardTweet can run
+        const includes = {
+          users: [{ id: tweet.author_id, username: 'webhook' }],
+          media: []
+        };
+
+        console.log(`[${new Date().toISOString()}] Simulated tweet ${tweet.id} via webhook`);
+        forwardTweet(tweet, includes);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'ok', message: 'Simulated tweet processed' }));
+      } catch (err) {
+        console.error(`[${new Date().toISOString()}] Incoming‐webhook error:`, err);
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ status: 'error', message: 'Invalid payload' }));
+      }
+    });
+    return;
   } else {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Kiosuku OK\n'); // This line keeps Railway happy
+    res.end('Kiosuku OK\n');
   }
-}).listen(8080, () => {
-  console.log(`[${new Date().toISOString()}] Health check server running on port 8080`);
+})
+.listen(process.env.PORT || 8080, () => {
+  const port = process.env.PORT || 8080;
+  console.log(`[${new Date().toISOString()}] Health check server running on port ${port}`);
 });
 
 // Helper: select prioritized media and extract fields
