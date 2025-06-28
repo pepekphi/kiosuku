@@ -280,32 +280,34 @@ http.createServer((req, res) => {
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       try {
-        const {
-          timestamp = new Date().toISOString(),
-          xId,
-          conversationId,
-          tweetId,
-          text
-        } = JSON.parse(body);
+        const parsed = JSON.parse(body);
+        const timestamp   = parsed.timestamp || new Date().toISOString();
+        const rawXId      = parsed.xId;
+        const authorId    = (typeof rawXId === 'string' && rawXId.trim() !== '') ? rawXId : 'Webhook'; // Make it 'Webhook' if is not given or if it is ""
+        const conversationId = parsed.conversationId;
+        const tweetId     = parsed.tweetId;
+        const text        = parsed.text;
 
         // construct a “fake” tweet
         const tweet = {
-          id:            tweetId.toString(),
-          author_id:     xId.toString(),
+          id:              tweetId.toString(),
+          author_id:       authorId,
           conversation_id: conversationId.toString(),
-          created_at:    timestamp,
-          text
+          created_at:      timestamp,
+          text,
+          _isWebhook:      true   // flag to skip thread logic
         };
+        
         // minimal includes block so forwardTweet can run
         const includes = {
           users: [{
-            id:            tweet.author_id,
-            username:      tweet.author_id   // use the exact X-ID you passed in
+            id:       authorId,
+            username: authorId
           }],
           media:  [],
           tweets: []
         };
-
+      
         console.log(`[${new Date().toISOString()}] Simulated tweet ${tweet.id} via webhook`);
         forwardTweet(tweet, includes);
 
@@ -466,8 +468,13 @@ async function forwardTweet(tweet, includes) {
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
   if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
   
-  const type = getTweetType(tweet, 0);
-  if (type) insertData.type = type;
+  // set post_type for webhook vs stream
+  if (tweet._isWebhook) {
+    insertData.type = 'Webhook';
+  } else {
+    const type = getTweetType(tweet, 0);
+    if (type) insertData.type = type;
+  }
 
   storeTweet(insertData); // Supabase write
 
