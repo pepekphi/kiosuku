@@ -298,8 +298,12 @@ http.createServer((req, res) => {
         };
         // minimal includes block so forwardTweet can run
         const includes = {
-          users: [{ id: tweet.author_id, username: 'webhook' }],
-          media: []
+          users: [{
+            id:            tweet.author_id,
+            username:      tweet.author_id   // use the exact X-ID you passed in
+          }],
+          media:  [],
+          tweets: []
         };
 
         console.log(`[${new Date().toISOString()}] Simulated tweet ${tweet.id} via webhook`);
