@@ -239,7 +239,7 @@ let softRateLimitUntil = null;
 let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
-const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|(?<!\bcomment\s)(?<!\bvote\s)\bbelow\b)/i;
+const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|(?<!\bcomment\s)(?<!\bvote\s)\bbelow\b)/i;
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
