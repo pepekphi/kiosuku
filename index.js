@@ -5,6 +5,7 @@ const INACTIVITY_TIMEOUT = 120 * 60 * 1000; // 2 hours
 const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
 const THREAD_EXPIRATION_MS = 1 * 60 * 1000; // 1 minute
+const RETWEET_WINDOW_MS = 2 * 60 * 1000; // Retweets and quoted tweets need to be posted less than 2 minutes after the original tweet
 
 // Forwarding rules block START, also remove this "if (shouldForward(" 2 times if I decide to remove this block
 const FORWARD_FILTERS = {
@@ -427,6 +428,26 @@ async function forwardTweet(tweet, includes) {
     console.warn(`[${new Date().toISOString()}] Skipping malformed tweet`);
     return;
   }
+
+  // --- NEW: Skip old retweets/quotes, basically it only forwards retweets and quoted tweets if the original was posted less than x minutes ago ---
+  const ref = (tweet.referenced_tweets || [])
+    .find(r => r.type === 'retweeted' || r.type === 'quoted');
+  if (ref) {
+    // find the original tweet in includes
+    const original = includes.tweets.find(t => t.id === ref.id);
+    if (original && tweet.created_at && original.created_at) {
+      const nowMs      = new Date(tweet.created_at).getTime();
+      const origMs     = new Date(original.created_at).getTime();
+      if (nowMs - origMs > RETWEET_WINDOW_MS) {
+        console.log(
+          `[${new Date().toISOString()}] Skipping ${ref.type} ${tweet.id} ` +
+          `(original ${ref.id} is older than 2 min)`
+        );
+        return;
+      }
+    }
+  }
+  // --- END NEW LOGIC ---
 
   const user = includes.users.find(u => u.id === tweet.author_id);
   const username = user?.username ?? 'unknown';
