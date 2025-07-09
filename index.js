@@ -22,6 +22,7 @@ const FORWARD_FILTERS = {
     /compromise/i,
     /is out now/i,
     /is out!/i,
+    /shipping announcement/i,
     /debuting/i,
     /proud to/i,
     /pleased to/i,
