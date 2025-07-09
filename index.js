@@ -28,6 +28,7 @@ const FORWARD_FILTERS = {
     /is here/i,
     /are here/i,
     /excited to share/i,
+    /excited to be/i,
     /is coming to/i,
     /is coming soon to/i,
     /arrives on/i,
