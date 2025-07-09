@@ -5,7 +5,7 @@ const INACTIVITY_TIMEOUT = 120 * 60 * 1000; // 2 hours
 const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
 const THREAD_EXPIRATION_MS = 1 * 60 * 1000; // 1 minute
-const RETWEET_WINDOW_MS = 2 * 60 * 1000; // Retweets and quoted tweets need to be posted less than 2 minutes after the original tweet
+const RETWEET_WINDOW_MS = 4 * 60 * 1000; // Retweets and quoted tweets need to be posted less than x minutes (first number) after the original tweet for them to be added to Supabase
 
 // Forwarding rules block START, also remove this "if (shouldForward(" 2 times if I decide to remove this block
 const FORWARD_FILTERS = {
@@ -501,7 +501,7 @@ async function forwardTweet(tweet, includes) {
 
   storeTweet(insertData); // Supabase write
 
-  if (shouldForward(text)) {
+  if (!ref && shouldForward(text)) {
     axios.post(WEBHOOK_URL, payload)
       .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
   }
