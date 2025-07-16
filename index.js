@@ -501,7 +501,9 @@ async function forwardTweet(tweet, includes) {
 
   storeTweet(insertData); // Supabase write
 
-  if (!ref && shouldForward(text)) {
+  const isRepost   = insertData.type === 'Repost'; // Needed because !ref does not always work
+  const isQuoted   = insertData.type?.startsWith('Quote'); // Needed because !ref does not always work
+  if (!isRepost && !isQuoted && !ref && shouldForward(text)) {
     axios.post(WEBHOOK_URL, payload)
       .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
   }
