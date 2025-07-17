@@ -564,7 +564,9 @@ async function flushThread(conversationId) {
   storeTweet(insertData); // Supabase db write
   console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
 
-  if (shouldForward(merged)) {
+  const isRepost = type === 'Repost';
+  const isQuoted = type?.startsWith('Quote');
+  if (!isRepost && !isQuoted && shouldForward(merged)) {
     axios.post(WEBHOOK_URL, payload)
       .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
   }
