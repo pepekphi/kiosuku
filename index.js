@@ -578,7 +578,7 @@ function handleTweet(tweet, includes) {
   const convId = tweet.conversation_id;
   const isRoot = convId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
-  const isThreadOpener = THREAD_OPENER_REGEX.test(text);
+  const isThreadOpener = THREAD_OPENER_REGEX.test(text) || text.endsWith(':');
     
   if (threadBuffers.has(convId)) {
     const buf = threadBuffers.get(convId);
