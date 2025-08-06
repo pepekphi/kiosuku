@@ -56,6 +56,7 @@ const FORWARD_FILTERS = {
     /added to the roadmap/i,
     /passes/i,
     /upgrade:/i,
+    /news:/i,
     /core pce/i,
     /partners with/i,
     /is partnering/i,
