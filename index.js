@@ -357,6 +357,38 @@ function getMediaInfo(tweet, includes) {
   return { mediaText, mediaUrl };
 }
 
+// --- NEW HELPERS: detect non-image URLs for specific sources ---
+function isImageUrl(raw) {
+  try {
+    const u = new URL(raw);
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.toLowerCase();
+
+    // Common image file extensions
+    if (/\.(jpg|jpeg|png|gif|webp|bmp|tif|tiff|svg)(?:$|\?|#)/i.test(path)) return true;
+
+    // Known Twitter/X image hosts & short image links
+    if (host === 'pbs.twimg.com' || host === 'pic.twitter.com' || host === 'pic.x.com') return true;
+
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function tweetContainsNonImageUrl(tweet) {
+  const urls = tweet?.entities?.urls || [];
+  if (!urls.length) return false;
+
+  // If ANY url is not an image, return true (meaning: contains a non-image link)
+  return urls.some(u => {
+    const href = u?.expanded_url || u?.unwound_url || u?.url || '';
+    if (!href) return false;
+    return !isImageUrl(href);
+  });
+}
+// --- END NEW HELPERS ---
+
 function forceFullRestart() {
   console.log(`[${new Date().toISOString()}] Forcing container restart`);
   process.exit(1);
@@ -458,6 +490,15 @@ async function forwardTweet(tweet, includes) {
 
   const user = includes.users.find(u => u.id === tweet.author_id);
   const username = user?.username ?? 'unknown';
+
+  // --- NEW RULE: Skip ZeroHedge/DiscloseTV tweets with any non-image URL ---
+  const uname = (username || '').toLowerCase();
+  if ((uname === 'zerohedge' || uname === 'disclosetv') && tweetContainsNonImageUrl(tweet)) {
+    console.log(`[${new Date().toISOString()}] Skipping @${username} tweet ${tweet.id} due to non-image link`);
+    return;
+  }
+  // --- END NEW RULE ---
+  
   const text = getFullTweetText(tweet, includes);
   if (text.trim().startsWith('@') && !/^@\S+\s+posted:\s*/.test(text.trim())) { // The last part makes sure the text doesn't start with "@someone posted: "
     // console.log(`[${new Date().toISOString()}] Skipping non-retweet @ tweet ${tweet.id}`);
@@ -527,6 +568,15 @@ async function flushThread(conversationId) {
   const first = buf.tweets[0];
   const user = first.includes.users.find(u => u.id === first.tweet.author_id);
   const name = user?.username ?? 'unknown';
+
+  // --- NEW RULE: Skip ZeroHedge/DiscloseTV threads if root contains a non-image URL ---
+  const uname = (name || '').toLowerCase();
+  if ((uname === 'zerohedge' || uname === 'disclosetv') && tweetContainsNonImageUrl(first.tweet)) {
+    console.log(`[${new Date().toISOString()}] Skipping thread ${conversationId} from @${name} due to non-image link`);
+    threadBuffers.delete(conversationId);
+    return;
+  }
+  // --- END NEW RULE ---
 
   // Extract expanded URL from first tweet
   const urls = first.tweet.entities?.urls || [];
