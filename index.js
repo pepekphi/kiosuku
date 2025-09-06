@@ -384,6 +384,10 @@ function tweetContainsNonImageUrl(tweet) {
   return urls.some(u => {
     const href = u?.expanded_url || u?.unwound_url || u?.url || '';
     if (!href) return false;
+    try {
+      const h = new URL(href).hostname.toLowerCase();
+      if (h.endsWith('x.com') || h.endsWith('twitter.com')) return false; // ignore X status links
+    } catch {}
     return !isImageUrl(href);
   });
 }
@@ -480,7 +484,7 @@ async function forwardTweet(tweet, includes) {
       if (nowMs - origMs > RETWEET_WINDOW_MS) {
         console.log(
           `[${new Date().toISOString()}] Skipping ${ref.type} ${tweet.id} ` +
-          `(original ${ref.id} is older than 2 min)`
+          `(original ${ref.id} is older than ${Math.round(RETWEET_WINDOW_MS / 60000)} min)`
         );
         return;
       }
@@ -493,7 +497,7 @@ async function forwardTweet(tweet, includes) {
 
   // --- NEW RULE: Skip ZeroHedge/DiscloseTV tweets with any non-image URL ---
   const uname = (username || '').toLowerCase();
-  if ((uname === 'zerohedge' || uname === 'disclosetv') && tweetContainsNonImageUrl(tweet)) {
+  if ((uname === 'zerohedge' || uname === 'disclosetv' || uname === 'cryptoslate') && tweetContainsNonImageUrl(tweet)) {
     console.log(`[${new Date().toISOString()}] Skipping @${username} tweet ${tweet.id} due to non-image link`);
     return;
   }
@@ -571,7 +575,7 @@ async function flushThread(conversationId) {
 
   // --- NEW RULE: Skip ZeroHedge/DiscloseTV threads if root contains a non-image URL ---
   const uname = (name || '').toLowerCase();
-  if ((uname === 'zerohedge' || uname === 'disclosetv') && tweetContainsNonImageUrl(first.tweet)) {
+  if ((uname === 'zerohedge' || uname === 'disclosetv' || uname === 'cryptoslate') && tweetContainsNonImageUrl(first.tweet)) {
     console.log(`[${new Date().toISOString()}] Skipping thread ${conversationId} from @${name} due to non-image link`);
     threadBuffers.delete(conversationId);
     return;
