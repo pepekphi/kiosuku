@@ -495,9 +495,9 @@ async function forwardTweet(tweet, includes) {
   const user = includes.users.find(u => u.id === tweet.author_id);
   const username = user?.username ?? 'unknown';
 
-  // --- NEW RULE: Skip ZeroHedge/DiscloseTV tweets with any non-image URL ---
+  // --- NEW RULE: Skip tweets from certain accounts with any non-image URL ---
   const uname = (username || '').toLowerCase();
-  if ((uname === 'zerohedge' || uname === 'disclosetv' || uname === 'cryptoslate') && tweetContainsNonImageUrl(tweet)) {
+  if ((uname === 'zerohedge' || uname === 'disclosetv' || uname === 'cryptoslate' || uname === 'theblock__') && tweetContainsNonImageUrl(tweet)) {
     console.log(`[${new Date().toISOString()}] Skipping @${username} tweet ${tweet.id} due to non-image link`);
     return;
   }
@@ -573,9 +573,9 @@ async function flushThread(conversationId) {
   const user = first.includes.users.find(u => u.id === first.tweet.author_id);
   const name = user?.username ?? 'unknown';
 
-  // --- NEW RULE: Skip ZeroHedge/DiscloseTV threads if root contains a non-image URL ---
+  // --- NEW RULE: Skip threads from certain accounts if root contains a non-image URL ---
   const uname = (name || '').toLowerCase();
-  if ((uname === 'zerohedge' || uname === 'disclosetv' || uname === 'cryptoslate') && tweetContainsNonImageUrl(first.tweet)) {
+  if ((uname === 'zerohedge' || uname === 'disclosetv' || uname === 'cryptoslate' || uname === 'theblock__') && tweetContainsNonImageUrl(first.tweet)) {
     console.log(`[${new Date().toISOString()}] Skipping thread ${conversationId} from @${name} due to non-image link`);
     threadBuffers.delete(conversationId);
     return;
