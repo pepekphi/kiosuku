@@ -6,6 +6,7 @@ const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
 const THREAD_EXPIRATION_MS = 1 * 60 * 1000; // 1 minute
 const RETWEET_WINDOW_MS = 4 * 60 * 1000; // Retweets and quoted tweets need to be posted less than x minutes (first number) after the original tweet for them to be added to Supabase
+const WS_PING_INTERVAL_MS = 25000; // 25s keep-alive ping interval
 
 // Forwarding rules block START, also remove this "if (shouldForward(" 2 times if I decide to remove this block
 const FORWARD_FILTERS = {
@@ -68,21 +69,21 @@ const FORWARD_FILTERS = {
     /core pce/i,
     /partners with/i,
     /is partnering/i,
-    /update:/i,    
+    /update:/i,
     /update -/i,
     /update —/i,
     /updates:/i,
     /updates -/i,
     /updates —/i,
     /ism services/i,
-    /big news/i,    
+    /big news/i,
     /exciting news/i,
     /starting today/i,
     / has now/i,
     /have now/i,
     / is now/i,
     / are now/i,
-    /can now be/i,    
+    /can now be/i,
     /now supports/i,
     /will add support for/i,
     /has received/i,
@@ -91,7 +92,7 @@ const FORWARD_FILTERS = {
     /gone live/i,
     /will go live/i,
     /just got/i,
-    /just made/i,   
+    /just made/i,
     /has\s+\w+ed\b/i,
     /have\s+\w+ed\b/i,
     /we've\s+\w+ed\b/i,
@@ -99,7 +100,7 @@ const FORWARD_FILTERS = {
     /\bwe're\s+\w+ing\b/i,
     /\bis\s+\w+ing\b/i,
     /\bare\s+\w+ing\b/i,
-    /\bhas been\s+\w+ed\b/i,    
+    /\bhas been\s+\w+ed\b/i,
     /added to the roadmap/i,
     /(?=.*(binance|bybit|coinbase|upbit|okx|bithumb|bitget|robinhood|robin hood|paypal|revolut))(?=.*(lists|listed|added to|addition|listing|will list|to list|activate|launch|will add|now supports|expanded|is now available|suspen|delist|remov|to add|will support|to support))/i,
     /(?=.*etfs?)(?=.*(appli|apply|file|submit|filing|register|approv|grant|cleared|greenlight|award|amend|submit updated|s-1 form|reject|denied|denies|to launch on|to go live on|no further comments|delay|postpone))/i,
@@ -199,8 +200,8 @@ const FORWARD_FILTERS = {
 function shouldForward(text) {
   const snippet150 = text.slice(0, 150);
   const snippet260 = text.slice(0, 260);
-  const snippet20  = text.slice(0, 20);
-  const snippet10  = text.slice(0, 10);
+  const snippet20 = text.slice(0, 20);
+  const snippet10 = text.slice(0, 10);
   let green = false;
 
   if (FORWARD_FILTERS.green150.some(rx => rx.test(snippet150))) green = true;
@@ -223,6 +224,7 @@ const http = require('http');
 const he = require('he');
 const { TwitterApi } = require('twitter-api-v2');
 const { createClient } = require('@supabase/supabase-js');
+const { WebSocketServer } = require('ws');
 const { maintenance24h: maintenance24h } = require('./maintenance24h');
 const { maintenance3h: maintenance3h } = require('./maintenance3h');
 
@@ -231,6 +233,7 @@ const TWITTER_BEARER_TOKEN = process.env.TWITTER_BEARER_TOKEN;
 const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
+const STREAM_WS_TOKEN = process.env.STREAM_WS_TOKEN; // Token required by WS clients
 if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
   console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
   process.exit(0);
@@ -253,8 +256,8 @@ const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?=\s)|[01]\/(?:\d+|x)
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
-// Health check server
-http.createServer((req, res) => {
+// HTTP server (health + maintenance + inbound webhook); named instance so WS can share the port
+const server = http.createServer((req, res) => {
   if (req.url === '/stats') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({
@@ -291,33 +294,33 @@ http.createServer((req, res) => {
     req.on('end', () => {
       try {
         const parsed = JSON.parse(body);
-        const timestamp   = parsed.timestamp || new Date().toISOString();
-        const rawXId      = parsed.xId;
-        const authorId    = (typeof rawXId === 'string' && rawXId.trim() !== '') ? rawXId : 'Webhook'; // Make it 'Webhook' if is not given or if it is ""
+        const timestamp = parsed.timestamp || new Date().toISOString();
+        const rawXId = parsed.xId;
+        const authorId = (typeof rawXId === 'string' && rawXId.trim() !== '') ? rawXId : 'Webhook'; // Make it 'Webhook' if is not given or if it is ""
         const conversationId = parsed.conversationId;
-        const tweetId     = parsed.tweetId;
-        const text        = parsed.text;
+        const tweetId = parsed.tweetId;
+        const text = parsed.text;
 
         // construct a “fake” tweet
         const tweet = {
-          id:              tweetId.toString(),
-          author_id:       authorId,
+          id: tweetId.toString(),
+          author_id: authorId,
           conversation_id: conversationId.toString(),
-          created_at:      timestamp,
+          created_at: timestamp,
           text,
-          _isWebhook:      true   // flag to skip thread logic
+          _isWebhook: true   // flag to skip thread logic
         };
-        
+
         // minimal includes block so forwardTweet can run
         const includes = {
           users: [{
-            id:       authorId,
+            id: authorId,
             username: authorId
           }],
-          media:  [],
+          media: [],
           tweets: []
         };
-      
+
         console.log(`[${new Date().toISOString()}] Simulated tweet ${tweet.id} via webhook`);
         forwardTweet(tweet, includes);
 
@@ -334,11 +337,84 @@ http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('Kiosuku OK\n');
   }
-})
-.listen(process.env.PORT || 8080, () => {
-  const port = process.env.PORT || 8080;
-  console.log(`[${new Date().toISOString()}] Health check server running on port ${port}`);
 });
+
+server.listen(process.env.PORT || 8080, () => {
+  const port = process.env.PORT || 8080;
+  console.log(`[${new Date().toISOString()}] Health/WS server running on port ${port}`);
+});
+
+// --- WebSocket server (low-latency broadcast) ---
+let wss = null;
+
+function extractWsToken(req) {
+  try {
+    const url = new URL(req.url, 'http://localhost');
+    const qToken = url.searchParams.get('token') || url.searchParams.get('auth') || url.searchParams.get('t');
+    if (qToken) return qToken;
+
+    const hdrAuth = req.headers['authorization'];
+    if (hdrAuth && /^bearer\s+/i.test(hdrAuth)) return hdrAuth.replace(/^bearer\s+/i, '').trim();
+
+    const hdrToken = req.headers['x-auth-token'] || req.headers['x-token'];
+    if (typeof hdrToken === 'string' && hdrToken.trim() !== '') return hdrToken.trim();
+  } catch { }
+  return null;
+}
+
+if (!STREAM_WS_TOKEN) {
+  console.warn(`[${new Date().toISOString()}] STREAM_WS_TOKEN not set. WS endpoint is DISABLED.`);
+} else {
+  wss = new WebSocketServer({
+    server,
+    path: '/stream',
+    perMessageDeflate: false,
+    verifyClient: (info, done) => {
+      try {
+        const token = extractWsToken(info.req);
+        if (token && token === STREAM_WS_TOKEN) return done(true);
+        return done(false, 401, 'Unauthorized');
+      } catch (e) {
+        return done(false, 400, 'Bad Request');
+      }
+    }
+  });
+
+  wss.on('connection', (ws, request) => {
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
+    ws.on('error', (err) => {
+      console.error(`[${new Date().toISOString()}] WS client error:`, err?.message || err);
+    });
+    ws.on('close', (code) => {
+      console.log(`[${new Date().toISOString()}] WS client disconnected (${code})`);
+    });
+    console.log(`[${new Date().toISOString()}] WS client connected from ${request.socket.remoteAddress}`);
+  });
+
+  const pingInterval = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      if (ws.isAlive === false) {
+        ws.terminate();
+        return;
+      }
+      ws.isAlive = false;
+      try { ws.ping(); } catch { }
+    });
+  }, WS_PING_INTERVAL_MS);
+
+  wss.on('close', () => clearInterval(pingInterval));
+}
+
+function broadcastToWsClients(message) {
+  if (!wss) return; // WS disabled
+  const data = JSON.stringify(message);
+  wss.clients.forEach(ws => {
+    if (ws.readyState === 1) { // OPEN
+      try { ws.send(data); } catch { }
+    }
+  });
+}
 
 // Helper: select prioritized media and extract fields
 function getMediaInfo(tweet, includes) {
@@ -387,7 +463,7 @@ function tweetContainsNonImageUrl(tweet) {
     try {
       const h = new URL(href).hostname.toLowerCase();
       if (h.endsWith('x.com') || h.endsWith('twitter.com')) return false; // ignore X status links
-    } catch {}
+    } catch { }
     return !isImageUrl(href);
   });
 }
@@ -401,7 +477,7 @@ function forceFullRestart() {
 function storeTweet(data, retryCount = 0) {
   supabase
     .from('posts')
-    .insert([ data ])
+    .insert([data])
     .then(({ error }) => {
       if (error) {
         console.error(
@@ -479,8 +555,8 @@ async function forwardTweet(tweet, includes) {
     // find the original tweet in includes
     const original = includes.tweets.find(t => t.id === ref.id);
     if (original && tweet.created_at && original.created_at) {
-      const nowMs      = new Date(tweet.created_at).getTime();
-      const origMs     = new Date(original.created_at).getTime();
+      const nowMs = new Date(tweet.created_at).getTime();
+      const origMs = new Date(original.created_at).getTime();
       if (nowMs - origMs > RETWEET_WINDOW_MS) {
         console.log(
           `[${new Date().toISOString()}] Skipping ${ref.type} ${tweet.id} ` +
@@ -502,7 +578,7 @@ async function forwardTweet(tweet, includes) {
     return;
   }
   // --- END NEW RULE ---
-  
+
   const text = getFullTweetText(tweet, includes);
   if (text.trim().startsWith('@') && !/^@\S+\s+posted:\s*/.test(text.trim())) { // The last part makes sure the text doesn't start with "@someone posted: "
     // console.log(`[${new Date().toISOString()}] Skipping non-retweet @ tweet ${tweet.id}`);
@@ -541,8 +617,8 @@ async function forwardTweet(tweet, includes) {
   };
   if (expandedUrl) insertData.page_url = expandedUrl; // Only if it is not ""
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
-  if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
-  
+  if (mediaUrl) insertData.media_url = mediaUrl; // Only if it is not ""
+
   // set post_type for webhook vs stream
   if (tweet._isWebhook) {
     insertData.type = 'Webhook';
@@ -553,8 +629,19 @@ async function forwardTweet(tweet, includes) {
 
   storeTweet(insertData); // Supabase write
 
-  const isRepost   = insertData.type === 'Repost'; // Needed because !ref does not always work
-  const isQuoted   = insertData.type?.startsWith('Quote'); // Needed because !ref does not always work
+  // Broadcast to WS clients (low-latency)
+  broadcastToWsClients({
+    type: 'post',
+    source: 'TWEET',
+    id: tweet.id,
+    content: text,
+    author: username,
+    url: expandedUrl,
+    createdAt: tweet.created_at
+  });
+
+  const isRepost = insertData.type === 'Repost'; // Needed because !ref does not always work
+  const isQuoted = insertData.type?.startsWith('Quote'); // Needed because !ref does not always work
   if (!isRepost && !isQuoted && !ref && shouldForward(text)) {
     axios.post(WEBHOOK_URL, payload)
       .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
@@ -595,7 +682,7 @@ async function flushThread(conversationId) {
   }
 
   //const isThread = buf.tweets.length > 1;
-    
+
   const payload = {
     timestamp: first.tweet.created_at,
     username: name,
@@ -604,7 +691,7 @@ async function flushThread(conversationId) {
     tweetText: merged,
     tweetExpandedURL: expandedUrl
   };
-  
+
   const { mediaText, mediaUrl } = getMediaInfo(first.tweet, first.includes);
 
   const insertData = {
@@ -617,13 +704,24 @@ async function flushThread(conversationId) {
   };
   if (expandedUrl) insertData.page_url = expandedUrl; // Only if it is not ""
   if (mediaText) insertData.scraped_media = mediaText; // Only if it is not ""
-  if (mediaUrl)  insertData.media_url  = mediaUrl; // Only if it is not ""
+  if (mediaUrl) insertData.media_url = mediaUrl; // Only if it is not ""
 
   const type = getTweetType(first.tweet, buf.tweets.length);
   if (type) insertData.type = type;
 
   storeTweet(insertData); // Supabase db write
   console.log(`[${new Date().toISOString()}] Thread ${conversationId} from @${name}`);
+
+  // Broadcast to WS clients (low-latency)
+  broadcastToWsClients({
+    type: 'post',
+    source: 'TWEET',
+    id: conversationId,
+    content: merged,
+    author: name,
+    url: expandedUrl,
+    createdAt: first.tweet.created_at
+  });
 
   const isRepost = type === 'Repost';
   const isQuoted = type?.startsWith('Quote');
@@ -640,7 +738,7 @@ function handleTweet(tweet, includes) {
   const isRoot = convId === tweet.id;
   const text = tweet.note_tweet?.text || tweet.text;
   const isThreadOpener = THREAD_OPENER_REGEX.test(text) || text.endsWith(':');
-    
+
   if (threadBuffers.has(convId)) {
     const buf = threadBuffers.get(convId);
     buf.tweets.push({ tweet, includes });
@@ -747,7 +845,7 @@ async function runStream() {
       streamInstance.destroy();
       streamInstance = null;
     }
-    
+
     // 💡 Soft rate limit mode - throttle retries for 15 min
     if (softRateLimit) {
       const remaining = softRateLimitUntil ? ((softRateLimitUntil - Date.now()) / 1000).toFixed(0) : 'unknown';
@@ -828,7 +926,7 @@ async function runStream() {
       await new Promise(r => setTimeout(r, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, maxDelay);
     }
-    
+
     if (attempts >= maxAttempts) {
       console.error(`[${new Date().toISOString()}] Max attempts reached. Restarting.`);
       forceFullRestart();
@@ -841,13 +939,13 @@ function getTweetType(tweet, bufLength = 0) {
   if (tweet.article && Object.keys(tweet.article).length > 0) {
     return 'Article';
   }
-  
-  const refs      = tweet.referenced_tweets?.map(r => r.type) || [];
+
+  const refs = tweet.referenced_tweets?.map(r => r.type) || [];
   const isRetweet = refs.includes('retweeted');
-  const isQuote   = refs.includes('quoted');
-  const isReply   = refs.includes('replied_to');
-  const text      = tweet.note_tweet?.text || tweet.text;
-  const isOpener  = THREAD_OPENER_REGEX.test(text);
+  const isQuote = refs.includes('quoted');
+  const isReply = refs.includes('replied_to');
+  const text = tweet.note_tweet?.text || tweet.text;
+  const isOpener = THREAD_OPENER_REGEX.test(text);
 
   // 1) A tweet that is both a quote and a reply
   if (isQuote && isReply) {
@@ -908,7 +1006,7 @@ process.on('unhandledRejection', reason => {
 (async () => {
   console.log(`[${new Date().toISOString()}] Boot delay: waiting 5s before starting stream...`);
   await new Promise(r => setTimeout(r, 5000)); // ⏳ Delay to avoid cold-start 429 from Twitter
-  
+
   while (true) {
     try {
       await runStream();
