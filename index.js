@@ -19,6 +19,7 @@ const FORWARD_FILTERS = {
     /shipping announcement/i,
     /major announcement/i,
     /great news/i,
+    /here's what's new/i,
     /incident/i,
     /exploit/i,
     /hack/i,
