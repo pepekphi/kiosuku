@@ -1,4 +1,4 @@
-// IMPORTANT: Make sure to define SUPABASE_KEY, SUPABASE_URL, TWITTER_BEARER_TOKEN, and WEBHOOK_URL in environment variables.
+// IMPORTANT: Make sure to define SUPABASE_KEY, SUPABASE_URL, TWITTER_BEARER_TOKEN, and WEBHOOK_URL in environment variables. EDIT: Also STREAM_WS_TOKEN (DJT)
 
 // Settings
 const INACTIVITY_TIMEOUT = 120 * 60 * 1000; // 2 hours
