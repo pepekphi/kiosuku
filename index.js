@@ -20,6 +20,8 @@ const FORWARD_FILTERS = {
     /major announcement/i,
     /great news/i,
     /here's what's new/i,
+    /buyback/i,
+    /repurchase/i,
     /incident/i,
     /exploit/i,
     /hack/i,
