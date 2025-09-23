@@ -1,7 +1,7 @@
 // IMPORTANT: Make sure to define SUPABASE_KEY, SUPABASE_URL, TWITTER_BEARER_TOKEN, and WEBHOOK_URL in environment variables. EDIT: Also STREAM_WS_TOKEN (DJT)
 
 // Settings
-const INACTIVITY_TIMEOUT = 120 * 60 * 1000; // 2 hours
+const INACTIVITY_TIMEOUT = 75 * 60 * 1000; // first number is number of minutes. This is for how long we tolerate no tweets coming in.
 const WAIT_FOR_THREAD_MS = 7600;
 const MAX_TWEETS_PER_THREAD = 8;
 const THREAD_EXPIRATION_MS = 1 * 60 * 1000; // 1 minute
@@ -837,7 +837,7 @@ async function startStreamSafe() {
 
 async function runStream() {
   let reconnectDelay = 600000; // 10 min
-  const maxDelay = 120 * 60 * 1000; // 2 hours
+  const maxDelay = 60 * 60 * 1000; // first number is number of minutes
   let attempts = 0;
   const maxAttempts = 10;
 
