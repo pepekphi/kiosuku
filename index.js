@@ -257,6 +257,9 @@ let lastTweetTime = Date.now();
 const threadBuffers = new Map();
 const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|(?<!\bcomment\s)(?<!\bvote\s)\bbelow\b)/i;
 
+// 🆕 Track when a stream connection opens to reset backoff after any successful connect
+let lastConnectOpenedAt = null;
+
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
 
 // HTTP server (health + maintenance + inbound webhook); named instance so WS can share the port
@@ -796,6 +799,10 @@ async function startStream() {
   }
 
   console.log(`[${new Date().toISOString()}] Connected to Twitter stream`);
+
+  // 🆕 mark successful connection so backoff can reset on next failure
+  lastConnectOpenedAt = Date.now();
+  
   lastTweetTime = Date.now();
 
   try {
@@ -836,10 +843,17 @@ async function startStreamSafe() {
 }
 
 async function runStream() {
-  let reconnectDelay = 600000; // 10 min
+  let reconnectDelay = 30000; // 30s
   const maxDelay = 60 * 60 * 1000; // first number is number of minutes
   let attempts = 0;
   const maxAttempts = 10;
+
+  // helper to reset backoff after any successful connection
+  const resetBackoffState = () => {
+    reconnectDelay = 30000; // base
+    attempts = 0;
+    lastConnectOpenedAt = null; // consumed
+  };
 
   while (!isShuttingDown && attempts < maxAttempts) {
     // Destroy previous stream before attempting to reconnect
@@ -863,8 +877,7 @@ async function runStream() {
     let startError = null;
     try {
       await startStreamSafe();
-      reconnectDelay = 30000;
-      attempts = 0;
+      resetBackoffState();
       break;  // ← stop the retry loop on success
     } catch (err) {
       startError = err;
@@ -880,6 +893,12 @@ async function runStream() {
       );
       streamInstance?.destroy?.();
       streamInstance = null;
+
+      // 🆕 If we had a successful connection since the last failure, reset backoff now
+      if (lastConnectOpenedAt) {
+        console.log(`[${new Date().toISOString()}] Backoff reset due to prior successful connection.`);
+        resetBackoffState();
+      }
 
       if (status === 429) {
         const headers = startError.response?.headers || {};
