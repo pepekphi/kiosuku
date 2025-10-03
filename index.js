@@ -2,7 +2,7 @@
 
 // Settings
 const INACTIVITY_TIMEOUT = 75 * 60 * 1000; // first number is number of minutes. This is for how long we tolerate no tweets coming in.
-const WAIT_FOR_THREAD_MS = 7600;
+const WAIT_FOR_THREAD_MS = 1600; // fuck this 7600, let's prioritise speed of processing over making sure we get the full thread
 const MAX_TWEETS_PER_THREAD = 8;
 const THREAD_EXPIRATION_MS = 1 * 60 * 1000; // 1 minute
 const RETWEET_WINDOW_MS = 4 * 60 * 1000; // Retweets and quoted tweets need to be posted less than x minutes (first number) after the original tweet for them to be added to Supabase
