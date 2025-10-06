@@ -111,6 +111,7 @@ const FORWARD_FILTERS = {
     /precautionary alert/i
   ],
   green20: [
+    /^(?=.{0,20})it's here/i,
     /^(?=.{0,20})just in/i,
     /^(?=.{0,20})breaking/i,
     /^(?=.{0,20})presenting/i,
