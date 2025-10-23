@@ -474,6 +474,11 @@ function tweetContainsNonImageUrl(tweet) {
     return !isImageUrl(href);
   });
 }
+
+// --- NEW HELPER: detect polls on a tweet ---
+function hasPoll(tweet) {
+  return Array.isArray(tweet?.attachments?.poll_ids) && tweet.attachments.poll_ids.length > 0;
+}
 // --- END NEW HELPERS ---
 
 function forceFullRestart() {
@@ -649,7 +654,9 @@ async function forwardTweet(tweet, includes) {
 
   const isRepost = insertData.type === 'Repost'; // Needed because !ref does not always work
   const isQuoted = insertData.type?.startsWith('Quote'); // Needed because !ref does not always work
-  if (!isRepost && !isQuoted && !ref && shouldForward(text)) {
+  const containsPoll = hasPoll(tweet); // NEW
+  
+  if (!isRepost && !isQuoted && !ref && !containsPoll && shouldForward(text)) {
     axios.post(WEBHOOK_URL, payload)
       .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
   }
@@ -664,6 +671,7 @@ async function flushThread(conversationId) {
   buf.tweets.sort((a, b) => BigInt(a.tweet.id) < BigInt(b.tweet.id) ? -1 : 1);
   const merged = buf.tweets.map(({ tweet, includes }) => getFullTweetText(tweet, includes)).join(' ');
   const first = buf.tweets[0];
+  const firstHasPoll = hasPoll(first.tweet); // NEW
   const user = first.includes.users.find(u => u.id === first.tweet.author_id);
   const name = user?.username ?? 'unknown';
 
@@ -732,7 +740,7 @@ async function flushThread(conversationId) {
 
   const isRepost = type === 'Repost';
   const isQuoted = type?.startsWith('Quote');
-  if (!isRepost && !isQuoted && shouldForward(merged)) {
+  if (!isRepost && !isQuoted && !firstHasPoll && shouldForward(merged)) {
     axios.post(WEBHOOK_URL, payload)
       .catch(err => console.error(`[${new Date().toISOString()}] Webhook error:`, err.response?.data || err.message));
   }
@@ -792,7 +800,10 @@ async function startStream() {
     'tweet.fields': 'created_at,conversation_id,note_tweet,referenced_tweets,entities,article,attachments',
     'user.fields': 'username',
     'media.fields': 'media_key,type,url,preview_image_url,alt_text',
-    expansions: 'author_id,referenced_tweets.id,attachments.media_keys'
+    // ADDED: request polls expansion
+    expansions: 'author_id,referenced_tweets.id,attachments.media_keys,attachments.poll_ids',
+    // ADDED: request poll fields (not strictly required for detection, but useful if needed later)
+    'poll.fields': 'id,options,duration_minutes,end_datetime,voting_status'
   });
 
   if (!streamInstance || !streamInstance[Symbol.asyncIterator]) {
