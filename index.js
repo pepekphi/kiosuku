@@ -238,6 +238,10 @@ const WEBHOOK_URL = process.env.WEBHOOK_URL;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_KEY;
 const STREAM_WS_TOKEN = process.env.STREAM_WS_TOKEN; // Token required by WS clients
+// Toggle for DB writes (set SUPABASE_WRITE=true|false|1|0|yes|no)
+const SUPABASE_WRITE = String(process.env.SUPABASE_WRITE ?? '1').toLowerCase();
+const SUPABASE_WRITES_ENABLED = (SUPABASE_WRITE === '1' || SUPABASE_WRITE === 'true' || SUPABASE_WRITE === 'yes');
+
 if (!TWITTER_BEARER_TOKEN || !WEBHOOK_URL || !SUPABASE_URL || !SUPABASE_KEY) {
   console.error(`[${new Date().toISOString()}] Missing required environment variables.`);
   process.exit(0);
@@ -262,6 +266,7 @@ const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?=\s)|[01]\/(?:\d+|x)
 let lastConnectOpenedAt = null;
 
 console.log(`[${new Date().toISOString()}] Service starting, PID: ${process.pid}`);
+console.log(`[${new Date().toISOString()}] Supabase writes are ${SUPABASE_WRITES_ENABLED ? 'ENABLED' : 'DISABLED'} (SUPABASE_WRITE=${SUPABASE_WRITE})`);
 
 // HTTP server (health + maintenance + inbound webhook); named instance so WS can share the port
 const server = http.createServer((req, res) => {
@@ -487,6 +492,12 @@ function forceFullRestart() {
 }
 
 function storeTweet(data, retryCount = 0) {
+  // Honor SUPABASE_WRITE toggle
+  if (!SUPABASE_WRITES_ENABLED) {
+    console.log(`[${new Date().toISOString()}] DB writes disabled; skipping insert for post ${data.post_id}`);
+    return;
+  }
+  
   supabase
     .from('posts')
     .insert([data])
