@@ -260,7 +260,7 @@ let softRateLimitUntil = null;
 let streamStarting = false;
 let lastTweetTime = Date.now();
 const threadBuffers = new Map();
-const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|(?<!\bcomment\s)(?<!\bvote\s)\bbelow\b)/i;
+const THREAD_OPENER_REGEX = /(?<!\d)(?:[01]\.(?=\s)|[01]\/(?=\s)|[01]\/(?:\d+|x)|🧵|\bthread\b|⬇️|🔽|⤵️|↴|↓|👇|(?<!\bcomment\s)(?<!\bvote\s)\bbelow\b|\blet's dive in\b)/i;
 
 // 🆕 Track when a stream connection opens to reset backoff after any successful connect
 let lastConnectOpenedAt = null;
